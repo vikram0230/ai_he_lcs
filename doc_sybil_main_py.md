@@ -1,6 +1,6 @@
-﻿# Documentation: Sybil `main.py`
+# Documentation: Sybil `main.py`
 
-*Last updated 11/15/2023 by Abdul Zakkar*
+*Last updated 11/20/2023 by Abdul Zakkar*
 
 ### 1. Directory structure of all NLST data
 
@@ -42,7 +42,7 @@ root
 
 ## The Plan
 - Iterate through each row in metadata.csv.
-- Since we have the image count for each directory, we can use it to filter out the CT scout images. We can include a default image count filter of <=10 images by default, list this value as a constant in the beginning on the script as:
+- Since we have the image count for each directory, we can use it to filter out the CT scout images. We can include an image count filter of <=10 images by default, list this value as a constant in the beginning on the script as:
 ```
 MINIMUM_IMAGE_COUNT = 10 
 # Please adjust to desired value.
@@ -74,10 +74,15 @@ root_dir = "/projects/com_shared/azakka2/nlst/NLST_all_CTs/manifest-NLST_1_of_20
 | pid | study_year | unique_id | 
 |---|---|---|
 | 100002 | 0 | 0OPASEVZOOMB50f340212080.040.0null | 
+
 Table columns continued...
+
 pred_yr1 | pred_yr2 | pred_yr3 | pred_yr4 | pred_yr5 | pred_yr6 |
 |---|---|---|---|---|---|
 | 0.0038567 | 0.0064984 | 0.0134987 | 0.0173409 | 0.0214857 | 0.259987 |
 
 - This script will be executed across 20 groups of DICOMs so they can be executed in parallel on different CPU cores.
 - Each DICOM group will get its own output `sybil_pred_[dir_name].csv`
+
+### Addendum
+- Now allows argument for DICOM directory. See `doc_run_sybil.md`.

@@ -1,7 +1,8 @@
-
 # Documentation: `cleanup_nlst_for_sybil.py` 
 
-`Usage: cleanup_nlst_for_sybil.py data_split.csv nlst_metadata_dir out_dir`
+*Last updated 11/20/2023 by Abdul Zakkar*
+
+`Usage: cleanup_nlst_for_sybil.py data_split.csv nlst_clinical_data_dir out_dir`
 
 This Python executable generates the following tabular output which will be used to validate the Sybil neural network classification model.
 Each row represents an individual CT scan.
@@ -79,3 +80,4 @@ nlst_780
 - The output CSV file will be named `cleanup_nlst_for_sybil_out.csv`
  
 [^1]: This formula assumes that every year has 365 days, neglecting leap years, which may result in very slight inaccuracies.
+

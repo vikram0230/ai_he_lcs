@@ -1,6 +1,6 @@
-﻿# Documentation: How to run Sybil on the UIC Extreme Cluster
+# Documentation: How to run Sybil on the UIC Extreme Cluster
 
-*Last updated 11/15/2023 by Abdul Zakkar*
+*Last updated 11/20/2023 by Abdul Zakkar*
 
 **Disclaimer:** NetID access to the Extreme Cluster is required to follow this tutorial. If you do not have access, you may request access [here](https://acer.uic.edu/get-started/request-access/).
 
@@ -149,3 +149,15 @@ Prediction(scores=[[0.0033378278896217693, 0.01461589983420139,
 0.060580642990126575]])
 ```
 - The 6 numbers listed are each probability of cancer diagnosis 1 year, 2 years, … , and 6 years after diagnosis.
+
+### Addendum:
+- In order to submit Sybil jobs in batches, I needed a way to pass a directory to Sybil via the terminal.
+- I created a new Apptainer image called `sybil_dir.sif`, which allows the user to run the image as such:
+```
+./sybil_dir.sif /path/to/dicom/directory
+```
+- This allows multiple PBS jobs to be set up with each job referencing a different directory.
+- I was able to create this custom image by using a new definition file.
+	- This new file uses local image bootstrapping and applies a new runscript which facilitates the inclusion of a directory argument.
+- Sybil's `main.py` (see `doc_sybil_main_py.md`) was then also modified to be able to handle a directory argument, by using `sys.argv[1]`.
+
