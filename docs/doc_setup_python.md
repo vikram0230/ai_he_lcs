@@ -25,7 +25,7 @@ nano python.def
 ```
 nano requirements.txt
 ```
-- Next, either paste the contents of this document (link to be added), or enter your own libraries in the following format:
+- Next, either paste the contents of [this document](../extras/requirements.txt), or enter your own libraries in the following format:
 ```
 library=version # e.g. numpy=1.26.2
 ```
