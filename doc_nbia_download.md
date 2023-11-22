@@ -20,7 +20,7 @@ This document details the process of obtaining all CT scans of patients who were
 ```
 nano nbia_retriever.def
 ```
-- Next, paste the contents of this document (link to be added), and save you document using Ctrl-X, then y.
+- Next, paste the contents of this document (link to be added), and save your document using Ctrl-X, then y.
 - Ensure that Apptainer is available for use by loading the module:
 ```
 module load Apptainer
