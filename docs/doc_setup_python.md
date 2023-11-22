@@ -16,7 +16,7 @@ module load Apptainer
 ```
 nano python.def
 ```
-- Now that the file is open, paste the contents of this document (link to be added), and save your document using Ctrl-X, then y.
+- Now that the file is open, paste the contents of [this document](../extras/python.def), and save your document using Ctrl-X, then y.
 
 ### Setting up the requirements file
 

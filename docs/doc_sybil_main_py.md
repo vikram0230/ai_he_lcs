@@ -2,6 +2,8 @@
 
 *Last updated 11/20/2023 by Abdul Zakkar*
 
+Find the Python script `main.py` [here](../scripts/main.py).
+
 ### 1. Directory structure of all NLST data
 
 ```
@@ -86,3 +88,5 @@ pred_yr1 | pred_yr2 | pred_yr3 | pred_yr4 | pred_yr5 | pred_yr6 |
 
 ### Addendum
 - Now allows argument for DICOM directory. See `doc_run_sybil.md`.
+- Also allows argument to use only a specific fraction of the metadata.csv file within the NBIA download of NLST data.
+- TODO- expand on these Addendum topics.

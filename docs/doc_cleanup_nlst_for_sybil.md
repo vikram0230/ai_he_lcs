@@ -2,6 +2,8 @@
 
 *Last updated 11/20/2023 by Abdul Zakkar*
 
+Find the Python script `cleanup_nlst_for_sybil.py` [here](../scripts/cleanup_nlst_for_sybil.py).
+
 `Usage: cleanup_nlst_for_sybil.py data_split.csv nlst_clinical_data_dir out_dir`
 
 This Python executable generates the following tabular output which will be used to validate the Sybil neural network classification model.

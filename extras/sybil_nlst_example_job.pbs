@@ -1,0 +1,33 @@
+# Queue for the job
+#PBS -q batch
+
+# Number of CPU nodes and processors assigned
+#PBS -l nodes=1:ppn=1
+
+# Time allotted for execution
+#PBS -l walltime=10:00:00:00
+
+# Job name
+#PBS -N sybil_nlst
+
+# Join output and error streams
+#PBS -j oe
+
+# Name output file
+#PBS -o sybil_nlst.out
+
+# Send email notifications for abort, begin, and end events
+#PBS -m abe
+
+# Email for notifications
+#PBS -M name@example.com
+
+# Start in job working directory
+cd $PBS_O_WORKDIR/
+
+# Load Apptainer to use Sybil image
+module load Apptainer
+
+# Run sybil prediction model on directory containing DICOMs per NBIA directory format
+# Arguments described in related documentation
+./sybil_dir.sif /path/to/dicom_dir 1/5

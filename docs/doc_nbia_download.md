@@ -20,7 +20,7 @@ This document details the process of obtaining all CT scans of patients who were
 ```
 nano nbia_retriever.def
 ```
-- Next, paste the contents of this document (link to be added), and save your document using Ctrl-X, then y.
+- Next, paste the contents of [this document](../extras/nbia_retriever.def), and save your document using Ctrl-X, then y.
 - Ensure that Apptainer is available for use by loading the module:
 ```
 module load Apptainer
@@ -49,3 +49,9 @@ printf '%s\n' y | ./nbia_retriever.sif -c /projects/com_shared/azakka2/nlst/mani
 	- `-d /projects/com_shared/azakka2/nlst/nlst_cancer_imaging_archive`- Passing the output directory, the download will be contained here.
 	- `-f` This argument signifies that the tool will skip downloading files to which the user does not have access.
 - The download will now begin. The download duration will be quite large.
+
+### Downloading the data as a PBS job
+
+- Due to the extremely large size of the data, it may be better to divide the download into multiple jobs that can all run simultaneously, downloading only a portion of the full dataset.
+- Linked [here](../extras/nbia_nlst_job.pbs) is an example of a PBS job to perform this download.
+- You can use a manifest `.tcia` file which does not contain the full dataset, but selecting only certain files from the [NBIA Search](https://nlst.cancerimagingarchive.net/nbia-search/), which can be accessed on [this page](https://wiki.cancerimagingarchive.net/display/NLST) for NLST, as the Search button in the "Radiology CT Images" row of the Data Access table. 

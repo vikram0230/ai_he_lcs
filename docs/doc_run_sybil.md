@@ -159,5 +159,5 @@ Prediction(scores=[[0.0033378278896217693, 0.01461589983420139,
 - This allows multiple PBS jobs to be set up with each job referencing a different directory.
 - I was able to create this custom image by using a new definition file.
 	- This new file uses local image bootstrapping and applies a new runscript which facilitates the inclusion of a directory argument.
-- Sybil's `main.py` (see `doc_sybil_main_py.md`) was then also modified to be able to handle a directory argument, by using `sys.argv[1]`.
+- Sybil's `main.py` (see `doc_sybil_main_py.md` [here](doc_sybil_main_py.md)) was then also modified to be able to handle a directory argument, by using `sys.argv[1]`.
 

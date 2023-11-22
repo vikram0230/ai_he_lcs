@@ -1,0 +1,32 @@
+# Queue for the job
+#PBS -q batch
+
+# Number of CPU nodes and processors assigned
+#PBS -l nodes=1:ppn=1
+
+# Time allotted for execution
+#PBS -l walltime=7:00:00:00
+
+# Job name
+#PBS -N nbia_1_nlst
+
+# Join output and error streams
+#PBS -j oe
+
+# Name output file
+#PBS -o nbia1.out
+
+# Send email notifications for abort, begin, and end events 
+#PBS -m abe
+
+# Email for notifications
+#PBS -M name@example.com
+
+# Load Apptainer to use NBIA container image
+module load Apptainer
+
+# Start in job working directory
+cd $PBS_O_WORKDIR/
+
+# Download .tcia manifest file
+printf '%s\n' y | ./nbia_retriever.sif -c /path/to/manifest.tcia -d output_dir -f
