@@ -11,3 +11,5 @@
 4. [Sybil `main.py`](docs/doc_sybil_main_py.md)
 
 5. [Preparing NLST Clinical Data for Sybil Evaluation `cleanup_nlst_for_sybil.py`](docs/doc_cleanup_nlst_for_sybil.md)
+
+6. [Filtering NLST data, then generating ROC curves based on Sybil predictions, and calculting AUC](docs/doc_sybil_nlst_filter_for_roc.md)

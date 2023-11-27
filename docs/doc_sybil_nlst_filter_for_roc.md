@@ -2,12 +2,12 @@
 
 *Last updated 11/27/2023 by Abdul Zakkar*
 
-Find the Python script `sybil_nlst_filter_to_roc.py` here. (link to be added)
+Find the Python script `sybil_nlst_filter_to_roc.py` [here](../scripts/sybil_nlst_filter_for_roc.py).
 
 ### Script Arguments
 
-- Sybil predictions- A CSV file with the format described here. (link to be added)
-- Truth table- A CSV file with the format described here. (link to be added)
+- Sybil predictions- A CSV file with the format described [here](doc_sybil_main_py.md).
+- Truth table- A CSV file with the format described [here](doc_cleanup_nlst_for_sybil.md).
 	- This table includes information regarding whether a patient had a diagnosis of lung cancer by year n. Sybil provides probabilities meant to predict this boolean (True/False) value.
 - Method for choosing CT scan kernel (i.e. convolution filter), options:
 	- Average the probability prediction across all kernels.
