@@ -16,6 +16,15 @@ cleanup_nlst_for_sybil.py (requires nlst clinical data, either via CDAS or the
 Cancer Imaging Archive).
 """
 
+# Constants
+operator_dict = {
+	'e'		:	'==',
+	'g'		:	'>',
+	'l'		:	'<',
+	'ge'	:	'>=',
+	'le'	:	'<='
+}
+
 def main():
 	print("Sybil NLST Filter for ROC curve drawing and AUC calculation")
 
@@ -38,6 +47,45 @@ def main():
 	print("Actual:", args.actual)
 	print("Prediction: ", args.prediction)
 	print("Filters: ", args.filters)
+	
+	# Read in CSVs
+	actual = pd.read_csv(args.actual)
+	print(actual.shape[0])
+	### prediction = pd.read_csv(args.prediction)
+
+	# Filter the actual CSV
+	actual_filtered = parse_filters(actual, args.filters)
+	print(actual_filtered.shape[0])
+
+	# Iterate through the filtered CSV
+
+	# For each entry, find the corresponding entr(y/ies) in the prediction CSV.
+
+	
+def parse_filters(df: pd.DataFrame, filters: list[str]) -> pd.DataFrame:
+	query_str = ""
+	for index in range(len(filters)):
+		parse_list = filters[index].split(':')
+		appended_str = ""
+		
+		# Add property name
+		appended_str += parse_list[0] + " "
+
+		# Add operator
+		if parse_list[2] not in operator_dict.keys():
+			raise Exception("Invalid operator. Options: e, g, l, ge, le.")
+		appended_str += operator_dict[parse_list[2]] + " "
+
+		# Add value
+		appended_str += parse_list[1]
+
+		# Add 'and'
+		if index != len(filters) - 1:
+			appended_str += " and "
+
+		query_str += appended_str
+	print(query_str)
+	return df.query(query_str)		
 
 start = time.perf_counter()
 main()
