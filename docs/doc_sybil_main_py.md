@@ -21,6 +21,7 @@ root
             |   |
             :   +---dcm files (e.g. 1-001.dcm)
 ```
+
 ### 2. metadata.csv contents
 | Column name | Example |
 |---|---|
