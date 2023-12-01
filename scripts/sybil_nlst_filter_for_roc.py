@@ -204,6 +204,7 @@ def generate_multi_roc(actual, prediction, out_dir):
         roc_auc = auc(fpr, tpr)
 
         plt.plot(fpr, tpr, linestyle = "-", label = "AUC = " + str(roc_auc))
+        # TODO: test plot generation
 
     plt.xlabel("1 - Specificity")
     plt.ylabel("Sensitivity")
@@ -225,10 +226,13 @@ def generate_confusion_matrices(actual, prediction, out_dir, cutoffs):
         with open(out_dir + "/" + csv_name, 'w') as current_csv:
             for cutoff in cutoffs:
                 current.csv.write("Probability cutoff,=,{cutoff}\n")
+                
                 tp = 0 # True Positive
                 tn = 0 # True Negative
                 fp = 0 # False Positive
                 fn = 0 # False Negative
+                
+                # Count TP, TN, FP, FN
                 for index, current_actual in enumerate(actual[year]):
                     current_prediction = prediction[year][index]
                     guess_positive: bool = current_prediction >= cutoff
@@ -240,16 +244,26 @@ def generate_confusion_matrices(actual, prediction, out_dir, cutoffs):
                         fp += 1
                     elif current_actual == 1 and not guess_positive:
                         fn += 1
+                
+                # Write confusion matrix
                 current_csv.write(",actual_positive,actual_negative\n")
                 current_csv.write(f"prediction_positive,{tp},{fp}\n")
                 current_csv.write(f"prediction_negative,{fn},{tn}\n")
+
                 # Calculate descriptive values
-                sensitivity = 0
-                specificity = 0
-                ppv = 0 # Positive Predictive Value
+                sensitivity = tp / (tp + fn)
+                specificity = tn / (tn + fp)
+                accuracy = (tp + tn) / (tp + rn + fp + fn)
+                ppv = tp / (tp + fp) # Positive Predictive Value
+                npv = tn / (tn + fn) # Negative Predictive Value
+                
+                # Write values
                 current_csv.write(f"Sensitivity,=,{sensitivity}\n")
                 current_csv.write(f"Specificity,=,{specificity}\n")
-                current_csv.write(f"PPV,=,{ppv}\n\n"
+                current_csv.write(f"Accuracy,=,{accuracy}\n")
+                current_csv.write(f"PPV,=,{ppv}\n")
+                current_csv.write(f"NPV,=,{npv}\n\n")
+    # TODO: Test confusion matrix generation
 
 start = time.perf_counter()
 main()
