@@ -1,3 +1,5 @@
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 import pandas as pd
 import time
 import sys
@@ -70,47 +72,48 @@ def main():
 
     # Read in CSVs
     actual = pd.read_csv(args.actual)
-    ### prediction = pd.read_csv(args.prediction)
+    prediction = pd.read_csv(args.prediction)
 
     # Filter the actual CSV
-    actual_filtered = parse_filters(actual, args.filters)
-    return ### TODO: remove
+    if len(args.filters) > 0:
+        actual_filtered = parse_filters(actual, args.filters)
+    else:
+        actual_filtered = actual
 
     # Initialize new actual dataframe
-    actual_aligned: list[list[int]] = [[]] * N_PREDICTION_YEARS
-    prediction_aligned: list[list[float]] = [[]] * N_PREDICTION_YEARS
+    actual_aligned = []
+    prediction_aligned = []
 
     # Iterate through the filtered CSV
     for index, row in actual_filtered.iterrows():
         query_str = ""
         # Find entries with the same PID
-        query_str += "pid == " + row["pid"] + " and "
+        query_str += "pid == " + str(row["pid"]) + " and "
         # Find entries with the same screening year
-        query_str += "study_year == " + row["study_yr"]
+        query_str += "study_yr == " + str(row["study_yr"])
         queried_prediction = prediction.query(query_str)
         n_predictions = queried_prediction.shape[0]
-        print(query_str)
-        print(queried_prediction)
 
         # There are multiple CT scans per individual patient per study year.
         # Because of this, the actual data and prediction data don't align.
-        # Thus, new actual data columns must be generated to match the
+        # Thus, repeated actual data columns must be generated to match the
         # prediction data.
-        for year in range(N_PREDICTION_YEARS):
-            # Add the appropriate number of repeated actual values to align with
-            # the number of predictions.
+        actual_values = []
+        for year in range(1,N_PREDICTION_YEARS+1):
             column_name = "canc_yr" + str(year)
             actual_value = row[column_name]
-            repeated_actual = [actual_value] * n_predictions
-            actual_aligned[year].extend(repeated_actual)
+            actual_values.append(actual_value)
+        for repeat in range(n_predictions):
+            actual_aligned.append(actual_values)
 
-            # Add the predictions to their appropriate column as well.
-            column_name = "pred_yr" + str(year)
-            current_prediction = queried_prediction[column_name].tolist()
-        
-        if index == 3: ### TODO: remove
-            prediction_aligned[year].extend(current_prediction)
-            break ###
+        # Add the prediction probability values to the aligned DataFrame.
+        for index in range(n_predictions):
+            prediction_values = []
+            for year in range(1,N_PREDICTION_YEARS+1):
+                column_name = "pred_yr" + str(year)
+                prediction_value = queried_prediction.iloc[index][column_name]
+                prediction_values.append(prediction_value)
+            prediction_aligned.append(prediction_values)
     
     # Create DataFrames
     # These dataframes can now be compared-
@@ -199,7 +202,8 @@ def generate_multi_roc(actual, prediction, out_dir):
     for year in actual:
         current_actual = actual[year].tolist()
         current_prediction = prediction[year].tolist()
-
+        print(len(current_actual), current_actual[:10])
+        print(len(current_prediction), current_prediction[:10])
         fpr, tpr, threshold = roc_curve(current_actual, current_prediction)
         roc_auc = auc(fpr, tpr)
 
