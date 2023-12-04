@@ -127,11 +127,16 @@ def main():
         prediction_aligned, columns = column_names
     )
 
+    # Create output directory named based on filters.
+    output_directory = args.outdir + '/' + generate_dir_name(args.filters)
+    if not os.path.exists(output_directory):
+        os.mkdir(output_directory)
+
     # Execute function to generate multi-ROC curve, generates PNG.
     generate_multi_roc(
         actual_aligned_df,
         prediction_aligned_df,
-        args.outdir
+        output_directory
     )
 
     # Execute function to generate multiple confusion matrices, generates one
@@ -139,9 +144,22 @@ def main():
     generate_confusion_matrices(
         actual_aligned_df,
         prediction_aligned_df,
-        args.outdir,
+        output_directory,
         args.cutoffs
     )
+
+def generate_dir_name(filters: list[str]) -> str:
+    # This function generates the name of the output directory depending on the
+    # filters used in the command line arguments.
+    output = "sybil_eval"
+    if len(filters) == 0:
+        return output + "_no_filters"
+    for index, filt in enumerate(filters):
+        output += '_'
+        filter_clean = filt.replace(':', '')
+        output += filter_clean
+    return output
+
 
 def parse_filters(df: pd.DataFrame, filters: list[str]) -> pd.DataFrame:
     # This function applies user-selected filters to given DataFrame.
@@ -202,16 +220,18 @@ def generate_multi_roc(actual, prediction, out_dir):
     for year in actual:
         current_actual = actual[year].tolist()
         current_prediction = prediction[year].tolist()
-        print(len(current_actual), current_actual[:10])
-        print(len(current_prediction), current_prediction[:10])
         fpr, tpr, threshold = roc_curve(current_actual, current_prediction)
-        roc_auc = auc(fpr, tpr)
+        # Calculate Area Under Curve (AUC), round to nearest 5 decimal points.
+        roc_auc = round(auc(fpr, tpr), 5)
 
-        plt.plot(fpr, tpr, linestyle = "-", label = "AUC = " + str(roc_auc))
+        plt.plot(fpr, tpr, linestyle = "-",
+            label = f"{year}: AUC = {roc_auc}")
         # TODO: test plot generation
 
     plt.xlabel("1 - Specificity")
     plt.ylabel("Sensitivity")
+    plt.title("Sybil Performance", loc = "center")
+    plt.legend(loc = "lower right")
 
     file_name = "multi_roc.png"
     plt.savefig(out_dir + "/" + file_name)
@@ -226,10 +246,10 @@ def generate_confusion_matrices(actual, prediction, out_dir, cutoffs):
     print("Generating confusion matrices...")
 
     for year in actual:
-        csv_name = "confusion_matrices_" + column + ".csv"
+        csv_name = "confusion_matrices_" + year + ".csv"
         with open(out_dir + "/" + csv_name, 'w') as current_csv:
             for cutoff in cutoffs:
-                current.csv.write("Probability cutoff,=,{cutoff}\n")
+                current_csv.write(f"Probability cutoff,=,{cutoff}\n")
                 
                 tp = 0 # True Positive
                 tn = 0 # True Negative
@@ -248,26 +268,29 @@ def generate_confusion_matrices(actual, prediction, out_dir, cutoffs):
                         fp += 1
                     elif current_actual == 1 and not guess_positive:
                         fn += 1
-                
+                total = tp+tn+fp+fn
+
                 # Write confusion matrix
                 current_csv.write(",actual_positive,actual_negative\n")
                 current_csv.write(f"prediction_positive,{tp},{fp}\n")
                 current_csv.write(f"prediction_negative,{fn},{tn}\n")
 
                 # Calculate descriptive values
-                sensitivity = tp / (tp + fn)
-                specificity = tn / (tn + fp)
-                accuracy = (tp + tn) / (tp + rn + fp + fn)
-                ppv = tp / (tp + fp) # Positive Predictive Value
-                npv = tn / (tn + fn) # Negative Predictive Value
-                
+                sensitivity = round(tp/(tp+fn), 5) if (tp+fn) != 0 else "DIV0"
+                specificity = round(tn/(tn+fp), 5) if (tn+fp) != 0 else "DIV0"
+
+                accuracy = round((tp+tn)/total, 5) if total != 0 else "DIV0"
+                # Positive Predictive Value
+                ppv = round(tp/(tp+fp), 5) if (tp+fp) != 0 else "DIV0"
+                # Negative Predictive Value
+                npv = round(tn/(tn+fn), 5) if (tn+fn) != 0 else "DIV0"
+
                 # Write values
                 current_csv.write(f"Sensitivity,=,{sensitivity}\n")
                 current_csv.write(f"Specificity,=,{specificity}\n")
                 current_csv.write(f"Accuracy,=,{accuracy}\n")
                 current_csv.write(f"PPV,=,{ppv}\n")
                 current_csv.write(f"NPV,=,{npv}\n\n")
-    # TODO: Test confusion matrix generation
 
 start = time.perf_counter()
 main()
