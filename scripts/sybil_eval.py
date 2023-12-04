@@ -157,6 +157,7 @@ def generate_dir_name(filters: list[str]) -> str:
     for index, filt in enumerate(filters):
         output += '_'
         filter_clean = filt.replace(':', '')
+        filter_clean = filter_clean.replace('_', '')
         output += filter_clean
     return output
 
