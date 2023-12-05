@@ -8,8 +8,8 @@
 
 3. [How to run Sybil on the UIC Extreme Cluster](docs/doc_run_sybil.md)
 
-4. [Sybil `main.py`](docs/doc_sybil_main_py.md)
+4. [Using Sybil to evaluate every CT chest in the NLST data `main.py`](docs/doc_sybil_main_py.md)
 
-5. [Preparing NLST Clinical Data for Sybil Evaluation `cleanup_nlst_for_sybil.py`](docs/doc_cleanup_nlst_for_sybil.md)
+5. [Preparing NLST Clinical Data for Sybil Evaluation `nlst_actual.py`](docs/nlst_actual.md)
 
-6. [Filtering NLST data, then generating ROC curves based on Sybil predictions, and calculting AUC](docs/doc_sybil_nlst_filter_for_roc.md)
+6. [Filtering NLST data, then generating ROC curves and confusion matrices based on Sybil predictions `sybil_eval.py`](docs/doc_sybil_eval.md)

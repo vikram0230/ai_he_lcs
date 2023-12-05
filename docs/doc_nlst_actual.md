@@ -1,10 +1,10 @@
-# Documentation: `cleanup_nlst_for_sybil.py` 
+# Documentation: `nlst_actual.py` 
 
-*Last updated 11/20/2023 by Abdul Zakkar*
+*Last updated 12/04/2023 by Abdul Zakkar*
 
-Find the Python script `cleanup_nlst_for_sybil.py` [here](../scripts/cleanup_nlst_for_sybil.py).
+Find the Python script `nlst_actual.py` [here](../scripts/nlst_actual.py).
 
-`Usage: cleanup_nlst_for_sybil.py data_split.csv nlst_clinical_data_dir out_dir`
+`Usage: nlst_actual.py data_split.csv nlst_clinical_data_dir out_dir`
 
 This Python executable generates the following tabular output which will be used to validate the Sybil neural network classification model.
 Each row represents an individual CT scan.

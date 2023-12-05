@@ -1,6 +1,6 @@
 # Documentation: Filtering NLST data, then generating ROC curves and confusion matrices based on Sybil predictions
 
-*Last updated 11/27/2023 by Abdul Zakkar*
+*Last updated 12/04/2023 by Abdul Zakkar*
 
 Find the Python script `sybil_eval.py` [here](../scripts/sybil_eval.py).
 
@@ -22,9 +22,7 @@ probability of cancer n years after a given CT scan. |
 | Shortened identifier | Identifier | Description | Default |
 |---|---|---|---|
 | -o OUTDIR | --outdir OUTDIR | A directory in which to generate the output. | Script current working directory. |
-| -f [FILTERS ...] | --filters [FILTERS ...] | Any number of filters to apply to the data, formated as such: property_name:value:operator, e.g. race:2:e. Operator
-options: e -> equal, g -> greater than, l -> less than, ge -> greater than or equal to, le
--> less than or equal to. | No filters. |
+| -f [FILTERS ...] | --filters [FILTERS ...] | Any number of filters to apply to the data, formated as such: property_name:value:operator, e.g. race:2:e. Operator options: e -> equal, g -> greater than, l -> less than, ge -> greater than or equal to, le -> less than or equal to. | No filters. |
 | -c [CUTOFFS ...] | --cutoffs [CUTOFFS ...] | Any number of probability cutoffs to be used for the generation of multiple confusion matrices. | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 |
 
 ### Example Usage
@@ -38,7 +36,20 @@ options: e -> equal, g -> greater than, l -> less than, ge -> greater than or eq
 
 ## Description
 
-- To be added.
+- This is the last script in the pipeline to evaluate the performance of the Sybil CNN model on NLST CT Chest DICOMs.
+- Please see documentation about how to generate the positional arguments: `actual` and `prediction`.
+    - Documentation for generating `actual` found [here](doc_nlst_actual.md).
+    - Documentation for generating `prediction` found [here](doc_sybil_main_py.md).
+- This script accepts user arguments for filters on NLST data (i.e. `actual`), using any number of the following properties:
+    - Patient ID (PID).
+    - Study Year 0 to 2. 
+    - Gender.
+    - Race.
+    - Sybil Data Split (Training, Development, Testing, Never seen).
+    - Presence of cancer N number of years after the CT scan.
+    - Number of days between CT scan event and day of diagnosis with lung cancer.
+- Use the link above for `actual` for further description of these properties.
+- The results of this script are represented as Receiver Operating Characteristic (ROC) curves and confusion matrices. See below.
 
 ## Outputs
 
