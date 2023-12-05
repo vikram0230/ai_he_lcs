@@ -3,7 +3,7 @@ import sys
 import time
 import numpy as np
 import pandas as pd
-
+import argparse
 """
 Prior to this script, Sybil should be used to generate a prediction.csv file.
 Sybil's CSV output should include 8 columns: pid | study_yr | pred_yr1-6
@@ -48,28 +48,44 @@ curve.
 #Constants
 DAYS_IN_YEAR = 365 # Slight error due to leap years
 
-
 def main():
-	# Check for correct usage.
-	if len(sys.argv) != 4:
-		print("Usage: " + sys.argv[0] +
-			"data_split.csv " +
-			"nlst_clinical_data_dir " +
-			"out_dir")
-		return
-	
+    print("NLST Actual (Truth values regarding cancer diagnosis by year N)")
+    
+    # ArgParse library is used to manage command line arguments.
+    parser = argparse.ArgumentParser(
+        epilog="Example: nlst_actual.py \
+        path/to/data_split.csv path/to/nlst_clinical_data_dir -o output_dir"
+    )
+	parser.add_argument("datasplit", help="a CSV file provided by Sybil \
+        authors which identifies the split of each CT by patient ID. \
+        Available on Google drive here: \
+        https://drive.google.com/drive/folders\
+        /1nBp05VV9mf5CfEO6W5RY4ZpcpxmPDEeR as pid2split.csv.")
+    parser.add_argument("clinical", help="a directory which can be downloaded \
+        from the Cancer Imaging Archive which contains clinical metadata \
+        regarding the NLST patients and the CT scans. Available here: \
+        https://wiki.cancerimagingarchive.net/display/NLST")
+    parser.add_argument("-o", "--outdir", help="A directory in which to \
+        generate the output. \
+        Default: script current working directory.",
+        default=os.getcwd())
+    args = parser.parse_args()
+    print("Data split:", args.datasplit)
+    print("Clinical data directory:", args.clinical)
+    print("Output directory:", args.outdir)
+
 	# Read in data split file provided by Sybil authors.
-	data_split = pd.read_csv(sys.argv[1])
+	data_split = pd.read_csv(args.datasplit)
 	
 	# Find the CT screen and prsn file.
-	metadata_files = os.listdir(sys.argv[2])
+	metadata_files = os.listdir(args.clinical)
 	screen_file = ""
 	prsn_file = ""
-	for file in metadata_files:
-		if "nlst" in file and "screen" in file:
-			screen_file = sys.argv[2] + file
-		if "nlst" in file and "prsn" in file:
-			prsn_file = sys.argv[2] + file
+	for file_name in metadata_files:
+		if "nlst" in file_name and "screen" in file_name:
+			screen_file = args.clinical + file_name
+		if "nlst" in file_name and "prsn" in file_name:
+			prsn_file = args.clinical + file_name
 
 	# Read in metadata CSVs
 	screen = pd.read_csv(screen_file) 
@@ -164,7 +180,7 @@ def main():
 		"sybil_data_split"
 	]) 
 	# Save output CSV in output directory
-	output_df.to_csv(sys.argv[3] + "/cleanup_nlst_for_sybil_out.csv",
+    output_df.to_csv(args.outdir + "/cleanup_nlst_for_sybil_out.csv",
 		index = False)
 
 start = time.perf_counter()

@@ -5,10 +5,10 @@ from os import listdir, path
 import time
 import sys
 from math import ceil
+import argparse
 
 """
 This script is utilized by sybil_dir.sif, and must be in the same directory.
-Please enter below the directory containing DICOMs.
 
 The DICOMs must be in the same directory structure as if they were downloaded
 via the NBIA retriever tool. See README for more details.
@@ -19,23 +19,32 @@ STUDY_YEAR_INDEX = ["1999", "2000", "2001"]
 MINIMUM_IMAGE_COUNT = 10
 
 def main():
-    # Check args
-    if len(sys.argv) != 2 and len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} nbia_download_dir portion(optional)" +
-            "\nportion format: " +
-            "\n\tn/n e.g. 1/5 will use the first 20% of the data."
-        )
+    print("Sybil Prediction")
 
-    # Read in arguments
-    root_dir = sys.argv[1]
-    portion = [int(i) for i in sys.argv[2].split("/")]
-    
+    # ArgParse library is used to manage command line arguments.
+    parser = argparse.ArgumentParser(
+        epilog="Example: ./sybil_dir.sif path/to/dicom_dir -p 1/5"
+    parser.add_argument("dicomdir", help="a directory downloaded from the \
+        Cancer Imaging Archive via the NBIA data retriever tool. Please see \
+        relevant documentation. This script parses this directory according \
+        to its original structure, please do not modify its contents.")
+    parser.add_argument("-p", "--portion", help="Identifies the fraction of \
+        the data to be evaluated. This option allows for concurrent instances \
+        of Sybil to evaluate different portions of the same directory in \
+        parallel. Examples: \
+        1/5 is the first 20% of the data. 5/5 is the last 20% of the data.",
+        default="keep_all")
+    args = parser.parse_args()
+    print("DICOM Directory:", args.dicomdir)
+    print("Portion:", args.portion)
+
     # Simple directory check:
-    root_dir_contents = listdir(root_dir)
+    root_dir_contents = listdir(args.dicomdir)
     if ("metadata.csv" not in root_dir_contents or
         "NLST" not in root_dir_contents
     ):
         print("Invalid directory structure. Please see README.")
+        return
 
     # Load a trained model
     model = Sybil("sybil_ensemble")
@@ -47,21 +56,25 @@ def main():
     ])
 
     # Read in metadata CSV file
-    metadata = pd.read_csv(root_dir + "/metadata.csv")
+    metadata = pd.read_csv(args.dicomdir + "/metadata.csv")
     row_count = metadata.shape[0]
-    start_index = int(ceil(row_count / portion[1]) * (portion[0] - 1))
-    end_index = int(min(
-        start_index + ceil(row_count / portion[1]) - 1, row_count - 1
-    ))
-    metadata = metadata.loc[start_index:end_index,:]
-    row_count = metadata.shape[0]
+
+    # Take a portion of the metadata
+    if args.portion != "keep_all":
+        portion = [int(i) for i in args.portion.split("/")]
+        start_index = int(ceil(row_count / portion[1]) * (portion[0] - 1))
+        end_index = int(min(
+            start_index + ceil(row_count / portion[1]) - 1, row_count - 1
+        ))
+        metadata = metadata.loc[start_index:end_index,:]
+        row_count = metadata.shape[0]
 
     output = [] 
     n_excluded = 0  
 
     # Logging
     print("Sybil prediction to be performed on contents of:" +
-        f"\n{root_dir}" +
+        f"\n{args.dicomdir}" +
         f"\nFrom index {start_index} to index {end_index}."
     )
 
@@ -73,7 +86,7 @@ def main():
         print(f"Evaluating {file_path}.")
         
         # Exclusion criteria: directory does not exist
-        full_dir = root_dir + file_path
+        full_dir = args.dicomdir + file_path
         if not path.exists(full_dir):
             print("Directory does not exist. Skipping.")
             n_excluded += 1
@@ -89,7 +102,7 @@ def main():
 
         # Exclusion criteria: slice thickness is greater than 5 mm.
         dcm = dcmread(
-            full_dir + "/" + listdir(root_dir + file_path)[0]
+            full_dir + "/" + listdir(args.dicomdir + file_path)[0]
         )
         slice_thickness = float(dcm.SliceThickness)
         if slice_thickness > 5.0:
@@ -123,13 +136,13 @@ def main():
         output_row.append(unique_id)
 
         # Evaluate probabilities with Sybil.
-        scores = evaluate(root_dir + file_path, model)
+        scores = evaluate(args.dicomdir + file_path, model)
         # Rounding for legibility
         scores = [round(i, 5) for i in scores]
         
         # Output current progress to text file
         write_progress(index + 1 - start_index, row_count, n_excluded, 
-            root_dir + f"/progress_{start_index}_{end_index}.out",
+            args.dicomdir + f"/progress_{start_index}_{end_index}.out",
             start_index, end_index
         )
 
@@ -149,7 +162,7 @@ def main():
         "pred_yr6"
     ])
     # Save output CSV in output directory
-    output_df.to_csv(root_dir + 
+    output_df.to_csv(args.dicomdir + 
         f"/sybil_predictions_{start_index}_{end_index}.csv",
         index = False)      
 

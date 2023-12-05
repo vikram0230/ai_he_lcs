@@ -33,11 +33,11 @@ OPERATOR_DICT = {
 DEFAULT_CUTOFFS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 def main():
-    print("Sybil NLST Filter for ROC curve drawing and AUC calculation")
+    print("Sybil Evaluation")
 
-    # ArgParse library is used to manage command line arguments.`
+    # ArgParse library is used to manage command line arguments.
     parser = argparse.ArgumentParser(
-        epilog="Example: sybil_nlst_filter_for_roc.py \
+        epilog="Example: sybil_eval.py \
         path/to/actual.csv path/to/prediction.csv -o output_dir \
         -f gender:2:e race:2:e -c 0.25 0.5 0.75"
     )
@@ -52,9 +52,9 @@ def main():
         generate the output. \
         Default: script current working directory.",
         default=os.getcwd())
-    parser.add_argument('-f', "--filters", help="Any number of filters to apply to the \
-            data, formated as such: property_name:value:operator, e.g. race:2:e. \
-        Operator options: \
+    parser.add_argument('-f', "--filters", help="Any number of filters to \
+        apply to the data, formated as such: property_name:value:operator, \
+        e.g. race:2:e. Operator options: \
         e -> equal, g -> greater than, l -> less than, \
         ge -> greater than or equal to, le -> less than or equal to. \
         Default: no filters.", 
@@ -65,10 +65,10 @@ def main():
         nargs='+', default=DEFAULT_CUTOFFS)
     args = parser.parse_args()
     print("Actual:", args.actual)
-    print("Prediction: ", args.prediction)
-    print("Output directory: ", args.outdir)
-    print("Filters: ", args.filters)
-    print("Cutoffs: ", args.cutoffs)
+    print("Prediction:", args.prediction)
+    print("Output directory:", args.outdir)
+    print("Filters:", args.filters)
+    print("Cutoffs:", args.cutoffs)
 
     # Read in CSVs
     actual = pd.read_csv(args.actual)
