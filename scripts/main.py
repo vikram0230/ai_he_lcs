@@ -34,9 +34,14 @@ def main():
         parallel. Examples: \
         1/5 is the first 20% of the data. 5/5 is the last 20% of the data.",
         default="keep_all")
+    parser.add_argument("-m", "--minimages", help="Identifies the minimum \
+        number of images required for the DICOM to be included for evaluation. \
+        If the value is below this minimum, it is considered to be a scout \
+        image. Default = 10 images.", type=int, default=MINIMUM_IMAGE_COUNT)
     args = parser.parse_args()
     print("DICOM Directory:", args.dicomdir)
     print("Portion:", args.portion)
+    print("Minimum images:", args.minimages)
 
     # Simple directory check:
     root_dir_contents = listdir(args.dicomdir)
@@ -94,8 +99,8 @@ def main():
 
         # Exclusion criteria: scout image, made up of 1-2 images.
         n_slices = row["Number of Images"]
-        if n_slices < MINIMUM_IMAGE_COUNT:
-            print(f"This DICOM has too few slices (< {MINIMUM_IMAGE_COUNT})." +
+        if n_slices < args.minimages:
+            print(f"This DICOM has too few slices (< {args.minimages})." +
                 "Skipping.")
             n_excluded += 1
             continue

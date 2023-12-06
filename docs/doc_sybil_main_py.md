@@ -1,10 +1,55 @@
 # Documentation: Sybil `main.py`
 
-*Last updated 11/20/2023 by Abdul Zakkar*
+*Last updated 12/06/2023 by Abdul Zakkar*
 
 Find the Python script `main.py` [here](../scripts/main.py).
 
-### 1. Directory structure of all NLST data
+## Usage
+
+`place_usage_here`
+
+This script is automatically called by the Sybil container image found [here](https://hub.docker.com/r/mitjclinic/sybil). In other words, when the Sybil container image is executed (e.g. `./sybil_latest.sif`), it looks for a script in its directory called `main.py` to run.
+
+### Positional arguments:
+
+| Argument | Description |
+|---|---|
+| dicomdir | A directory downloaded from the Cancer Imaging Archive via the NBIA data retriever tool. Please see relevant documentation. This script parses this directory according to its original structure, please do not modify its contents.|
+
+### Optional Arguments:
+
+| Shortened identifier | Identifier | Description | Default |
+|---|---|---|---|
+| -p | --portion | Identifies the fraction of the data to be evaluated. This option allows for concurrent instances of Sybil to evaluate different portions of the same directory in parallel. Examples: 1/5 is the first 20% of the data. 5/5 is the last 20% of the data. | keep_all |
+| -m | --minimages | Identifies the minimum number of images required for the DICOM to be included for evaluation. If the value is below this minimum, it is considered to be a scout image. | 10 images |
+
+### Example usage:
+
+`./sybil_dir.sif path/to/nlst_dicom_dir -p 1/5`
+
+This example shows `./sybil_dir.sif` used instead of `main.py` since `main.py` is called by `sybil_dir.sif` when running, and allows `main.py` to access the Sybil libraries.
+
+### Sybil Container Modification
+
+The Sybil container was modified to allow terminal arguments (explained above) to be utilized by this `main.py` script. The steps to perform this modification are as follows:
+
+- Download the original Sybil container image from Docker. 
+    - In this documentation, the Apptainer program is used to manage containers. You can read more about Apptainer [here](https://apptainer.org/docs/user/main/index.html).
+- Use the following command:
+    - `apptainer pull docker://mitjclinic/sybil`
+- Next, create a definition file that will allow the modification this container image:
+    - `nano sybil_dir.def`
+    - It is named `sybil_dir.def` because it is a version of the Sybil container which allows the user to pass a directory of CT scans as an argument in the command line. 
+- With `sybil_dir.def` open in Nano, paste the contents of this [document](../extras/sybil_dir.def) into the terminal. Save with Ctrl-X, then Y, then hit Enter.
+- Now build the new container image using this definition file:
+    - `apptainer build sybil_dir.sif sybil_dir.def`
+- The new file `sybil_dir.sif` should now be generated, which is now used for script execution (see example usage above).
+
+## Description
+
+### Positional argument `dicomdir`: Directory structure of NLST data
+
+When NLST data is downloaded from the Cancer Imaging Archive using the NBIA Data Retriever tool, the download directory structure is as follows:
 
 ```
 root
@@ -22,7 +67,12 @@ root
             :   +---dcm files (e.g. 1-001.dcm)
 ```
 
-### 2. metadata.csv contents
+This directory structure is important for the execution of this script.
+
+### metadata.csv contents
+
+The `metadata.csv` file is located in the outermost directory of the downloaded NLST data. It contains some details about each CT scan present in the download. This document is used to iterate through each CT scan in the download since it references their file locations.
+
 | Column name | Example |
 |---|---|
 | Series UID | 1.2.840.113654.2.55.108942278744480339540309181071819421924 |
@@ -43,36 +93,26 @@ root
 | File Location | ./NLST/121338/01-02-1999-NLST-LSS-70457/2.000000-0OPASEVZOOMB50f340212080.040.0null-84839 |
 | Download Timestamp | 2023-11-12T06:39:47.783 |
 
-## The Plan
-- Iterate through each row in metadata.csv.
-- Since we have the image count for each directory, we can use it to filter out the CT scout images. We can include an image count filter of <=10 images by default, list this value as a constant in the beginning on the script as:
-```
-MINIMUM_IMAGE_COUNT = 10 
-# Please adjust to desired value.
-include_bool = row["Number of Images"].values[0] > MINIMUM_IMAGE_COUNT
-    and other_filters
-```
-- Other filters?
-- If it is determined that a CT scan be used for prediction, 3 values will be used for identification: 
-	- `pid` = Subject ID column from metadata.csv.
-	- `study year` = Using the Study Date column in metadata.csv, 0 if the year is 1999, 1 if 2000, and 2 if 2001, to align with the values used in the NLST clinical data tables.
-	- `unique_id` = Series Description column from metadata.csv
-- In code, `study_year` could be mapped in code as follows:
-```
-STUDY_YEAR_INDEX = ["1999", "2000", "2001"]
-study_year = STUDY_YEAR_INDEX.index(
-    row["Study Date"].values[0].split("-")[-1]
-) # Should result in study_year = 0, 1, or 2.
-```
-- Now that we have a way to identify this individual CT scan and link it to the truth table generated from the NLST clinical data, the next step is to pass the CT into Sybil.
-- Sybil would receive the location of `root` in the directory tree defined above. This will be stored in a variable.
-```
-# Example root directory
-root_dir = "/projects/com_shared/azakka2/nlst/NLST_all_CTs/manifest-NLST_1_of_20"
-```
-- When at a specific row in metadata.csv, we can add the value in the File Location column to the root directory to find a specific CT with some string manipulation.
-- This directory can be passed into a function that creates a list of dcm files.
-- Sybil will eventually return 6 values, and a row for the final table can be constructed:
+### Identifying a portion of the CT scan DICOMs
+
+- First, the entire metadata.csv file is read into a DataFrame.
+- Then, a portion is selected depending on the `--portion` identified by the user in the command line (see above). For example, if `1/5` is entered, the first 20% of the metadata.csv file will be used.
+
+### Exclusion criteria
+
+- The DICOMs are evaluated one by one.
+- Prior to passing the DICOM to the Sybil CNN for evaluation, certain DICOMs must be filtered out due to not meeting specific criteria.
+
+Exclusion Criteria List:
+- Directory does not exist: On rare occasions, a directory file location listed in metadata.csv does not exist among the downloaded files.
+- Scout image exclusion: CT scout images are distinguished by setting a cutoff for the number of images in the DICOM file. By default, this cutoff is 10. This means that if a DICOM file has less than 10 images, it is assumed to be a scout image, and is excluded.
+    - The value of the minimum image count can be modified in the terminal with the identifier `-m`. See Optional arguments above.
+- Slice thickness is >5 mm: This limitation is in place through Sybil, so if a CT scan has a slice thickness too large, it will not be evaluated.
+- Unable to convert pixel data: On rare occasions, the file is unable to be converted by the Pydicom library, and thus cannot be evaluated.
+
+## Output
+
+- For each eligible DICOM, Sybil will eventually return 6 values, and a row for the final table can be constructed:
 
 | pid | study_year | unique_id | 
 |---|---|---|
@@ -84,10 +124,5 @@ pred_yr1 | pred_yr2 | pred_yr3 | pred_yr4 | pred_yr5 | pred_yr6 |
 |---|---|---|---|---|---|
 | 0.0038567 | 0.0064984 | 0.0134987 | 0.0173409 | 0.0214857 | 0.259987 |
 
-- This script will be executed across 20 groups of DICOMs so they can be executed in parallel on different CPU cores.
-- Each DICOM group will get its own output `sybil_pred_[dir_name].csv`
-
-### Addendum
-- Now allows argument for DICOM directory. See `doc_run_sybil.md`.
-- Also allows argument to use only a specific fraction of the metadata.csv file within the NBIA download of NLST data.
-- TODO- expand on these Addendum topics.
+- The output data will be stored in `sybil_predictions_start_end.csv`, where start and end are the indexes of the metadata.csv file which signify the range of the DICOMs evaluated in this document, based on the portion selected by the user. The output CSV file will be located in the same directory as chosen in the terminal.
+- An additional output will be found called `progress_start_end.txt`, so progress can be monitored during the execution of this script.

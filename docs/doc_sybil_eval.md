@@ -27,7 +27,7 @@ probability of cancer n years after a given CT scan. |
 
 ### Example Usage
 
-`sybil_nlst_filter_for_roc.py path/to/actual.csv path/to/prediction.csv -o output_dir -f gender:2:e race:2:e -c 0.25 0.5 0.75`
+`sybil_eval.py path/to/actual.csv path/to/prediction.csv -o output_dir -f gender:2:e race:2:e -c 0.25 0.5 0.75`
 
 ### More about the arguments
 
@@ -51,7 +51,7 @@ probability of cancer n years after a given CT scan. |
 - Use the link above for `actual` for further description of these properties.
 - The results of this script are represented as Receiver Operating Characteristic (ROC) curves and confusion matrices. See below.
 
-## Outputs
+## Output
 
 - A directory will be created and named based on the chosen filters.
 - This directory will include the following:
