@@ -24,6 +24,7 @@ def main():
     # ArgParse library is used to manage command line arguments.
     parser = argparse.ArgumentParser(
         epilog="Example: ./sybil_dir.sif path/to/dicom_dir -p 1/5"
+    )
     parser.add_argument("dicomdir", help="a directory downloaded from the \
         Cancer Imaging Archive via the NBIA data retriever tool. Please see \
         relevant documentation. This script parses this directory according \
@@ -32,7 +33,7 @@ def main():
         the data to be evaluated. This option allows for concurrent instances \
         of Sybil to evaluate different portions of the same directory in \
         parallel. Examples: \
-        1/5 is the first 20% of the data. 5/5 is the last 20% of the data.",
+        1/5 is the first 20%% of the data. 5/5 is the last 20%% of the data.",
         default="keep_all")
     parser.add_argument("-m", "--minimages", help="Identifies the minimum \
         number of images required for the DICOM to be included for evaluation. \

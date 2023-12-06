@@ -1,5 +1,9 @@
 # AI for Health Equity in Lung Cancer Screening
 
+The purpose of repository is firstly to provide all scripts utilized in our research project for the use of other researchers. For this reason, the documentation thoroughly outlines the steps taken to perform various analyses. There is an assumed understanding of the basics of the Linux terminal as well as Python.
+
+We will provide various resources relevant to the tools and frameworks used in this project for further reading.
+
 ## Table of Contents
 
 ### Chapter 1. Sybil Evaluation

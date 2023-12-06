@@ -6,7 +6,7 @@ Find the Python script `main.py` [here](../scripts/main.py).
 
 ## Usage
 
-`place_usage_here`
+`main.py [-h] [-p PORTION] [-m MINIMAGES] dicomdir`
 
 This script is automatically called by the Sybil container image found [here](https://hub.docker.com/r/mitjclinic/sybil). In other words, when the Sybil container image is executed (e.g. `./sybil_latest.sif`), it looks for a script in its directory called `main.py` to run.
 
