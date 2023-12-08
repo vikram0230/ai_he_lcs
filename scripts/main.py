@@ -119,7 +119,7 @@ def main():
         # Exclusion criteria: Pydicom is unable to convert pixel data.
         try:
             dcm.convert_pixel_data()
-        except NotImplementedError:
+        except:
             print("Pydicom unable to convert pixel data. Skipping.")
             n_excluded += 1
             continue
