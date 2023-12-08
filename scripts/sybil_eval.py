@@ -114,7 +114,7 @@ def main():
                 prediction_value = queried_prediction.iloc[index][column_name]
                 prediction_values.append(prediction_value)
             prediction_aligned.append(prediction_values)
-    
+   
     # Create DataFrames
     # These dataframes can now be compared-
     # year1 of the actual aligned df can be compared with year1 of the
@@ -126,6 +126,19 @@ def main():
     prediction_aligned_df = pd.DataFrame(
         prediction_aligned, columns = column_names
     )
+    
+    print(f"Number of associated CT DICOMs: {prediction_aligned_df.shape[0]}")
+
+    # Check that we have a non-zero number of entries after filtering and
+    # aligning. If not, exit script.
+    if actual_aligned_df.shape[0] == 0:
+        print("There are no entries left in actual values after filtering. " +
+            "Quitting.")
+        return
+    if prediction_aligned_df.shape[0] == 0:
+        print("There are no entries left in prediction values after aligning" +
+            " to actual values. Quitting.")
+        return
 
     # Create output directory named based on filters.
     output_directory = args.outdir + '/' + generate_dir_name(args.filters)
@@ -206,7 +219,9 @@ def parse_filters(df: pd.DataFrame, filters: list[str]) -> pd.DataFrame:
             appended_str += " and "
 
         query_str += appended_str
-    print(query_str) ### TODO: remove
+    print(f"Query: {query_str}")
+    output = df.query(query_str)
+    print(f"Number of entries satisfying query: {output.shape[0]}")
     return df.query(query_str)      
 
 def generate_multi_roc(actual, prediction, out_dir):
