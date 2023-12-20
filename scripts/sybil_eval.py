@@ -1,6 +1,7 @@
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_curve, auc, confusion_matrix
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 import time
 import sys
 import os
@@ -30,7 +31,9 @@ OPERATOR_DICT = {
     'le'    :   '<='
 }
 
-DEFAULT_CUTOFFS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+# Global rounding: the number of digits to the right of the decimal point
+# when rounding, throughout this script.
+GR = 5
 
 def main():
     print("Sybil Evaluation")
@@ -61,8 +64,8 @@ def main():
         nargs='+', default=[])
     parser.add_argument('-c', '--cutoffs', help="Any number of probability \
         cutoffs to be used for the generation of multiple confusion matrices. \
-        Default: " + str(DEFAULT_CUTOFFS), type=float,
-        nargs='+', default=DEFAULT_CUTOFFS)
+        Default: Youden's J index", type=float,
+        nargs='+', default=None)
     args = parser.parse_args()
     print("Actual:", args.actual)
     print("Prediction:", args.prediction)
@@ -146,7 +149,7 @@ def main():
         os.mkdir(output_directory)
 
     # Execute function to generate multi-ROC curve, generates PNG.
-    generate_multi_roc(
+    optimal_cutoffs = generate_multi_roc(
         actual_aligned_df,
         prediction_aligned_df,
         output_directory
@@ -154,12 +157,22 @@ def main():
 
     # Execute function to generate multiple confusion matrices, generates one
     # CSV file per prediction year.
-    generate_confusion_matrices(
-        actual_aligned_df,
-        prediction_aligned_df,
-        output_directory,
-        args.cutoffs
-    )
+    if args.cutoffs:
+        generate_confusion_matrices(
+            actual_aligned_df,
+            prediction_aligned_df,
+            output_directory,
+            args.cutoffs,
+            mode = "all"
+        )
+    else:
+        generate_confusion_matrices(
+            actual_aligned_df,
+            prediction_aligned_df,
+            output_directory,
+            optimal_cutoffs,
+            mode = "one_each"
+        )
 
 def generate_dir_name(filters: list[str]) -> str:
     # This function generates the name of the output directory depending on the
@@ -231,18 +244,25 @@ def generate_multi_roc(actual, prediction, out_dir):
     # and area under curve (AUC) value is provided for each curve.
     
     print("Generating Multi-ROC curve...")
-    
+
+    # Can return a list of cutoffs determined by maximizing the Youden’s
+    # J index, or equivalently, the sum of sensitivity and specificity, across
+    # all points of the ROC curve.
+    # One cutoff per ROC curve.
+    output = []
     plt.figure(figsize = (5, 5), dpi = 100)
     for year in actual:
         current_actual = actual[year].tolist()
         current_prediction = prediction[year].tolist()
         fpr, tpr, threshold = roc_curve(current_actual, current_prediction)
         # Calculate Area Under Curve (AUC), round to nearest 5 decimal points.
-        roc_auc = round(auc(fpr, tpr), 5)
+        roc_auc = round(auc(fpr, tpr), GR)
+
+        optimal_cutoff = threshold[np.argmax(tpr - fpr)]
+        output.append(optimal_cutoff)
 
         plt.plot(fpr, tpr, linestyle = "-",
             label = f"{year}: AUC = {roc_auc}")
-        # TODO: test plot generation
 
     plt.xlabel("1 - Specificity")
     plt.ylabel("Sensitivity")
@@ -251,62 +271,79 @@ def generate_multi_roc(actual, prediction, out_dir):
 
     file_name = "multi_roc.png"
     plt.savefig(out_dir + "/" + file_name)
+    return output
 
-def generate_confusion_matrices(actual, prediction, out_dir, cutoffs):
+def generate_confusion_matrices(actual, prediction, out_dir, cutoffs,
+    mode='one_each'):
     # This function uses actual and prediction values to create multiple
-    # confusion matrices
-    # TODO: Confusion matrix requires:
-    # True positive, true negative, false positive, false negative.
-    # Create such a table for every probability cutoff.
+    # confusion matrices using the provided cutoffs (thresholds).
     
     print("Generating confusion matrices...")
+    print(f"Cutoffs: {cutoffs}")
 
-    for year in actual:
+    if mode not in ["all", "one_each"]:
+        print("Invalid value for parameter \"mode\": use \"all\" or " +
+            "\"one_each\".")
+        return
+    # Interchangeable modes:
+    # all: uses every cutoff for each prediction year.
+    # one_each: one cutoff is used for one prediction year, so the number of
+    # cutoffs should be equal to the number of prediction years.
+
+    if mode == "one_each":
+        if prediction.shape[1] != len(cutoffs):
+            print("Mode \"one_each\": The number of cutoffs selected is " +
+                "not equal to the number of prediction years.")
+            return
+
+    for index, year in enumerate(actual):
         csv_name = "confusion_matrices_" + year + ".csv"
         with open(out_dir + "/" + csv_name, 'w') as current_csv:
-            for cutoff in cutoffs:
-                current_csv.write(f"Probability cutoff,=,{cutoff}\n")
-                
-                tp = 0 # True Positive
-                tn = 0 # True Negative
-                fp = 0 # False Positive
-                fn = 0 # False Negative
-                
-                # Count TP, TN, FP, FN
-                for index, current_actual in enumerate(actual[year]):
-                    current_prediction = prediction[year][index]
-                    guess_positive: bool = current_prediction >= cutoff
-                    if   current_actual == 1 and     guess_positive:
-                        tp += 1
-                    elif current_actual == 0 and not guess_positive:
-                        tn += 1
-                    elif current_actual == 0 and     guess_positive:
-                        fp += 1
-                    elif current_actual == 1 and not guess_positive:
-                        fn += 1
-                total = tp+tn+fp+fn
+            if mode == "all":
+                for cutoff in cutoffs:
+                    matrix_csv = counts_to_matrix(
+                        actual[year], prediction[year], cutoff)
+                    current_csv.write(matrix_csv)
+            elif mode == "one_each":
+                matrix_csv = counts_to_matrix(
+                    actual[year], prediction[year], cutoffs[index])
+                current_csv.write(matrix_csv)
+    
+def counts_to_matrix(truth, prediction, cutoff):
+    # This function accepts a truth array, prediction array, and cutoff, then
+    # returns a string in CSV format representing a confusion matrix with
+    # additional descriptive statistics:
+    # Sensitivity, Specificity, Accuracy, Positive Predictive Value, and
+    # Negative Predictive Value.
+    
+    output = f"Probability cutoff,=,{round(cutoff, GR)}\n"
+    pred = np.where(prediction > cutoff, 1, 0)
+    tn, fp, fn, tp = confusion_matrix(truth, pred).ravel()
+    total = tn+fp+fn+tp
 
-                # Write confusion matrix
-                current_csv.write(",actual_positive,actual_negative\n")
-                current_csv.write(f"prediction_positive,{tp},{fp}\n")
-                current_csv.write(f"prediction_negative,{fn},{tn}\n")
+    # Write confusion matrix
+    output += ",actual_positive,actual_negative\n"
+    output += f"prediction_positive,{tp},{fp}\n"
+    output += f"prediction_negative,{fn},{tn}\n"
 
-                # Calculate descriptive values
-                sensitivity = round(tp/(tp+fn), 5) if (tp+fn) != 0 else "DIV0"
-                specificity = round(tn/(tn+fp), 5) if (tn+fp) != 0 else "DIV0"
+    # Calculate descriptive values
+    sensitivity = round(tp/(tp+fn), GR) if (tp+fn) != 0 else "DIV0"
+    specificity = round(tn/(tn+fp), GR) if (tn+fp) != 0 else "DIV0"
 
-                accuracy = round((tp+tn)/total, 5) if total != 0 else "DIV0"
-                # Positive Predictive Value
-                ppv = round(tp/(tp+fp), 5) if (tp+fp) != 0 else "DIV0"
-                # Negative Predictive Value
-                npv = round(tn/(tn+fn), 5) if (tn+fn) != 0 else "DIV0"
+    accuracy = round((tp+tn)/total, GR) if total != 0 else "DIV0"
+    # Positive Predictive Value
+    ppv = round(tp/(tp+fp), GR) if (tp+fp) != 0 else "DIV0"
+    # Negative Predictive Value
+    npv = round(tn/(tn+fn), GR) if (tn+fn) != 0 else "DIV0"
 
-                # Write values
-                current_csv.write(f"Sensitivity,=,{sensitivity}\n")
-                current_csv.write(f"Specificity,=,{specificity}\n")
-                current_csv.write(f"Accuracy,=,{accuracy}\n")
-                current_csv.write(f"PPV,=,{ppv}\n")
-                current_csv.write(f"NPV,=,{npv}\n\n")
+    # Write values
+    output += f"Sensitivity,=,{sensitivity}\n"
+    output += f"Specificity,=,{specificity}\n"
+    output += f"Accuracy,=,{accuracy}\n"
+    output += f"PPV,=,{ppv}\n"
+    output += f"NPV,=,{npv}\n\n"
+
+    return output
 
 start = time.perf_counter()
 main()
