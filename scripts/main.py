@@ -106,15 +106,24 @@ def main():
             n_excluded += 1
             continue
 
-        # Exclusion criteria: slice thickness is greater than 5 mm.
+        # Reading in first slice of the DICOM for verification.
         dcm = dcmread(
             full_dir + "/" + listdir(args.dicomdir + file_path)[0]
         )
-        slice_thickness = float(dcm.SliceThickness)
-        if slice_thickness > 5.0:
-            print("Slice thickness is too large (> 5 mm). Skipping.")
+
+        # Exclusion criteria: cannot read slice thickness.
+        if not hasattr(dcm, "SliceThickness"):
+            print("Cannot read slice thickness. Skipping.")
             n_excluded += 1
             continue
+        else:
+            
+            # Exclusion criteria: slice thickness is greater than 5 mm.
+            slice_thickness = float(dcm.SliceThickness)
+            if slice_thickness > 5.0:
+                print("Slice thickness is too large (> 5 mm). Skipping.")
+                n_excluded += 1
+                continue
 
         # Exclusion criteria: Pydicom is unable to convert pixel data.
         try:
@@ -142,18 +151,22 @@ def main():
         output_row.append(unique_id)
 
         # Evaluate probabilities with Sybil.
-        scores = evaluate(args.dicomdir + file_path, model)
-        # Rounding for legibility
-        scores = [round(i, 5) for i in scores]
-        
-        # Output current progress to text file
-        write_progress(index + 1 - start_index, row_count, n_excluded, 
-            args.dicomdir + f"/progress_{start_index}_{end_index}.out",
-            start_index, end_index
-        )
+        try:
+            scores = evaluate(args.dicomdir + file_path, model)
+            # Rounding for legibility
+            scores = [round(i, 5) for i in scores]
+            
+            # Output current progress to text file
+            write_progress(index + 1 - start_index, row_count, n_excluded, 
+                args.dicomdir + f"/progress_{start_index}_{end_index}.out",
+                start_index, end_index
+            )
 
-        # Add row to final output.
-        output.append(output_row + scores)
+            # Add row to final output.
+            output.append(output_row + scores)
+        except:
+            print("Evaluation failed. Skipping.")
+            continue
 
     # Convert output into a Pandas DataFrame.
     output_df = pd.DataFrame(output, columns=[
