@@ -1,17 +1,31 @@
 from math import exp
 import pandas as pd
+import joblib
 
 class Models:
     model_dict = {}
 
-    def __init__(self):
-        self.load_models()
+    def __init__(self, path):
+        self.load_models(path)
 
-    def load_models(self):
-        pass
+    def load_models(self, path):
+        for year in range(1,6+1):
+            name = 'svm11_y' + str(year)
+            model_dict[name] = joblib.load(path + '/' + name + '.joblib')
+            name = 'svm6_y' + str(year)
+            model_dict[name] = joblib.load(path + '/' + name + '.joblib')
 
-    def svm11(self, X):
-        return self.model_dict['svm11'].predict_proba(X)
+    def svm11(self, year, X):
+        return self.model_dict['svm11_y'+str(year)].predict_proba(X)
+
+    def svm6(self, year, X):
+        return self.model_dict['svm6_y'+str(year)].predict_proba(X)
+
+    def svm11s(self, year, X):
+        return self.model_dict['svm11s_y'+str(year)].predict_proba(X)
+    
+    def svm6s(self, year, X):
+        return self.model_dict['svm6s_y'+str(year)].predict_proba(X)
 
     def plcom2012(self, X):
         required_columns = [
