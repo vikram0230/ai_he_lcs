@@ -1,31 +1,30 @@
 from math import exp
 import pandas as pd
 import joblib
+import os
 
 class Models:
-    model_dict = {}
+    svm_dict = {}
 
     def __init__(self, path):
         self.load_models(path)
 
     def load_models(self, path):
-        for year in range(1,6+1):
-            name = 'svm11_y' + str(year)
-            model_dict[name] = joblib.load(path + '/' + name + '.joblib')
-            name = 'svm6_y' + str(year)
-            model_dict[name] = joblib.load(path + '/' + name + '.joblib')
-
-    def svm11(self, year, X):
-        return self.model_dict['svm11_y'+str(year)].predict_proba(X)
-
-    def svm6(self, year, X):
-        return self.model_dict['svm6_y'+str(year)].predict_proba(X)
-
-    def svm11s(self, year, X):
-        return self.model_dict['svm11s_y'+str(year)].predict_proba(X)
+        for filename in os.listdir(path):
+            f = os.path.join(path, filename)
+            if os.path.isfile(f) and f.endswith('.joblib'):
+                name = filename.split('.')[0]
+                print(f"Loading model {f}")
+                self.svm_dict[name] = joblib.load(f)
     
-    def svm6s(self, year, X):
-        return self.model_dict['svm6s_y'+str(year)].predict_proba(X)
+    def get_models(self, name):
+        output = {}
+        if name == 'plcom2012':
+            return {name: self.plcom2012}
+        for key in self.svm_dict.keys():
+            if name in key.split('_'):
+                output[key] = self.svm_dict[key].predict_proba
+        return output
 
     def plcom2012(self, X):
         required_columns = [

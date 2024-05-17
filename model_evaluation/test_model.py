@@ -1,51 +1,48 @@
 import argparse
 import pandas as pd
 
-from models import plcom2012
-# from Evaluation import generate_figure
-
-MODEL_DICT = {
-    'plcom2012': plcom2012
-}
+from models import Models
+from evaluate import generate_figure
 
 def get_cli_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("modeldir",
+        help="Directory containing models.")
     parser.add_argument("model", 
-        choices=[
-            'plcom2012',
-            'svm6',
-            'svm11',
-            'sybil'
-        ],
         help="Name of the ML model to test.")
     parser.add_argument("testset",
         help="CSV file containing the test set.")
-    parser.add_argument('-s', "--submodel",
-        help="Name of the submodel to test.",
-        default=None)
+    parser.add_argument('truth',
+        help="The column name in the data set for the ground truth")
     parser.add_argument('-o', "--outdir",
         help="The directory in which to generate the figure.")
+    parser.add_argument('-f', '--features', nargs='+',
+        help="Optional list of features to use for training. " + 
+        "If not specified, all columns other than the ground truth " +
+        "will be used as features for training.",
+        required=False,
+        default=None)
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
     args = get_cli_args()
 
-    # Get model
-    model = MODEL_DICT[args.model]
-    if type(model) is dict:
-        if args.submodel == None:
-            print(
-                "The specified ML model must have a chosen submodel." +
-                f"\nChoices: {list(model.keys())}"
-            )
-            exit(1)
-        model = model[args.submodel]
+    models = Models(args.modeldir)
 
     # Get test set
-    test = pd.read_csv(args.testset)
+    df = pd.read_csv(args.testset)
+    if args.features is None:
+        X = df[df.columns.difference([args.truth]) + [args.truth]]
+    else:
+        X = df[args.features + [args.truth]]
+    
+    X = X.dropna(subset=[args.truth])
+    y = X[args.truth]
+    X = X.drop(columns=[args.truth])
+
+    predictors = models.get_models(args.model)
+    print(predictors)
 
     # Generate figure
-    generate_figure(model, test, 
-        output_directory=args.outdir
-    )
+    generate_figure(predictors, X, y, output=args.outdir)
