@@ -2,6 +2,7 @@ from math import exp
 import pandas as pd
 import joblib
 import os
+import re
 
 class Models:
     svm_dict = {}
@@ -14,17 +15,21 @@ class Models:
             f = os.path.join(path, filename)
             if os.path.isfile(f) and f.endswith('.joblib'):
                 name = filename.split('.')[0]
-                print(f"Loading model {f}")
                 self.svm_dict[name] = joblib.load(f)
     
     def get_models(self, name):
         output = {}
+        if name == 'feature':
+            return {name: self.feature}
         if name == 'plcom2012':
             return {name: self.plcom2012}
         for key in self.svm_dict.keys():
-            if name in key.split('_'):
+            if bool(re.search(name, key)):
                 output[key] = self.svm_dict[key].predict_proba
         return output
+    
+    def feature(self, X):
+        return X[X.columns[0]]
 
     def plcom2012(self, X):
         required_columns = [
