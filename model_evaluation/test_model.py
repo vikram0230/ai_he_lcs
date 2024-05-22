@@ -44,6 +44,8 @@ def get_cli_args():
         "will be used as features for testing.",
         required=False,
         default=None)
+    parser.add_argument('-v', '--verbose', action='store_true',
+        help="Optional argument to provide more information during execution.")
     args = parser.parse_args()
     return args
 
@@ -91,7 +93,8 @@ if __name__ == '__main__':
                 plot_label=f'Year {truth[-1]}',
                 plot_color=colors[index % len(colors)],
                 draw_roc_diagonal= index==0,
-                z_index=6-index)
+                z_index=6-index,
+                verbose=args.verbose)
             results = pd.concat([results, result])
             index += 1
         filename = args.outdir + '\\' + 'sybil-' + args.testset.split('\\')[-1].split('.')[0]
@@ -127,7 +130,8 @@ if __name__ == '__main__':
             plot_label=f'Year {truth[-1]}',
             plot_color=colors[index % len(colors)],
             draw_roc_diagonal= index==0,
-            z_index=6-index)
+            z_index=6-index,
+            verbose=args.verbose)
         results = pd.concat([results, result])
         index += 1
     filename = args.outdir + '\\' + model_name + '-' + args.testset.split('\\')[-1].split('.')[0]

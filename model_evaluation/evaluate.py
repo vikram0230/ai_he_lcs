@@ -5,9 +5,9 @@ from sklearn.metrics import roc_curve, precision_recall_curve, auc, confusion_ma
 
 def generate_results(model, X, y, ax_pr, ax_roc, z_index=0,
     plot_label='Line', plot_color='#000000', draw_roc_diagonal=False,
-    n_digits=3):
+    n_digits=3, verbose=False):
     # PR Curve
-    _x, _y = get_curve(model, X, y, curve='pr')
+    _x, _y = get_curve(model, X, y, curve='pr', verbose=verbose)
     pr_auc = auc(_x, _y)
     ax_pr.plot(_x, _y, color=plot_color,
         label=plot_label + f' AUC {pr_auc:.2f}',
@@ -17,7 +17,7 @@ def generate_results(model, X, y, ax_pr, ax_roc, z_index=0,
     ax_pr.legend(loc='upper right', fontsize=7, frameon=False)
 
     # ROC Curve
-    _x, _y = get_curve(model, X, y, curve='roc')
+    _x, _y = get_curve(model, X, y, curve='roc', verbose=verbose)
     roc_auc = auc(_x, _y)
     ax_roc.plot(_x, _y, color=plot_color,
         label=plot_label + f' AUC {roc_auc:.2f}',
@@ -37,7 +37,7 @@ def generate_results(model, X, y, ax_pr, ax_roc, z_index=0,
     return pd.DataFrame([output], columns=cols)
     # return pandas dataframe of all the table deta points.
 
-def get_curve(model, X, y, curve='roc', decision=0.5): # curve = 'roc' or 'pr'
+def get_curve(model, X, y, curve='roc', verbose=False): # curve = 'roc' or 'pr'
     y = y.astype(int)
     pred_y = model(X)
     if len(pred_y.shape) > 1:
@@ -46,7 +46,20 @@ def get_curve(model, X, y, curve='roc', decision=0.5): # curve = 'roc' or 'pr'
         precision, recall, _ = precision_recall_curve(y, pred_y)
         return recall, precision
     elif curve == 'roc':
-        fpr, tpr, _ = roc_curve(y, pred_y)
+        fpr, tpr, thresholds = roc_curve(y, pred_y)
+        if verbose:
+            data = []
+            for sensitivity in [i/10.0 for i in range(1,10)]:
+                cutoff = thresholds[np.abs(tpr - sensitivity).argmin()]
+                decision = [1 if prob >= cutoff else 0 for prob in pred_y]
+                _, fp, fn, tp = confusion_matrix(y, decision).ravel()
+                sen = tp/(tp+fn) if (tp+fn) != 0 else np.nan
+                ppv = tp/(tp+fp) if (tp+fp) != 0 else np.nan
+                current_data = [sen, ppv]
+                for i in range(len(current_data)):
+                    current_data[i] = round(current_data[i], 3)
+                data.append(current_data)
+            print(pd.DataFrame(data, columns=['sensitivity', 'PPV']))
         return fpr, tpr
     else:
         return None, None
