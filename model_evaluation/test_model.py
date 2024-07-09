@@ -1,8 +1,9 @@
 import argparse
+from os.path import isfile
 import pandas as pd
 
 from models import Models
-from evaluate import generate_results
+from evaluate import generate_results, generate_results_ci
 
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
@@ -44,10 +45,32 @@ def get_cli_args():
         "will be used as features for testing.",
         required=False,
         default=None)
+    parser.add_argument('-e', '--ensemble', action='store_true',
+        help="Optional argument to use multiple test sets. " +
+        "Any test set will be used. " +
+        "This means that a 95%% confidence interval will be generated across " +
+        "all test sets. Uses 'feature' model.")
     parser.add_argument('-v', '--verbose', action='store_true',
         help="Optional argument to provide more information during execution.")
     args = parser.parse_args()
     return args
+
+def get_csvs(path, verbose):
+    output = []
+    MAX_ITER = 10000
+    index = 1
+    while index < MAX_ITER:
+        current_path = path.replace('#', str(index))
+        if not isfile(current_path):
+            index -= 1
+            break
+        if verbose:
+            print(f'Found {current_path}.')
+        output.append(pd.read_csv(current_path))
+        index += 1
+    if verbose:
+        print(f'Found {index} csvs.')
+    return output
 
 if __name__ == '__main__':
     args = get_cli_args()
@@ -72,12 +95,50 @@ if __name__ == '__main__':
     ax_roc.set_xticks([0,1])
     ax_roc.set_yticks([0,1])
 
-    df = pd.read_csv(args.testset)
+    if args.ensemble:
+        # Create XY data set for each model.
+        # 3D data- X (specificity), Y (senstivity), N year
+        # Data is 4D when you include the model.
+        # Then generate the image with CIs.
+        dfs = get_csvs(args.testset, args.verbose)
+
+        results = pd.DataFrame()
+        index = 0
+        for feature in args.features:
+            truth = args.truth
+            if '#' in truth:
+                truth = truth.replace('#', feature[-1])
+            X_list, y = [], []
+            for inner_index, df in enumerate(dfs):
+                X = df[[feature, truth]]
+                X = X.dropna(subset=[truth])
+                if inner_index == 0:
+                    y = X[truth]
+                X = X.drop(columns=[truth])
+                X_list.append(X)
+            print(f"Model (None)")
+            print(f"Truth column: {truth}")
+            print(f"Feature columns: {feature}")
+            result = generate_results_ci(predictors['feature'], X_list, y, ax_pr, ax_roc,
+                plot_label=f'Year {truth[-1]}',
+                plot_color=colors[index % len(colors)],
+                draw_roc_diagonal= index==0,
+                z_index=6-index,
+                n_points=1000,
+                verbose=args.verbose)
+            results = pd.concat([results, result])
+            index += 1
+        filename = args.outdir + '\\' + 'feature-' + args.testset.split('\\')[-1].split('.')[0]
+        filename = filename.replace('#', 'N_ci')
+        f.savefig(filename + '.svg', format='svg', bbox_inches='tight')
+        results.to_csv(filename + '.csv', index=False)
+        exit(0)
     
+    df = pd.read_csv(args.testset)
+
     if args.model == 'feature':
         results = pd.DataFrame()
         index = 0
-        model_name = 'model'
         for feature in args.features:
             truth = args.truth
             if '#' in truth:
@@ -97,7 +158,7 @@ if __name__ == '__main__':
                 verbose=args.verbose)
             results = pd.concat([results, result])
             index += 1
-        filename = args.outdir + '\\' + 'sybil-' + args.testset.split('\\')[-1].split('.')[0]
+        filename = args.outdir + '\\' + 'feature-' + args.testset.split('\\')[-1].split('.')[0]
         f.savefig(filename + '.svg', format='svg', bbox_inches='tight')
         results.to_csv(filename + '.csv', index=False)
         exit(0)
