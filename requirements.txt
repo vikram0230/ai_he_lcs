@@ -1,0 +1,8 @@
+torch
+torchvision
+pydicom>=2.4.0
+Pillow
+numpy
+pandas
+dinov2
+timm
