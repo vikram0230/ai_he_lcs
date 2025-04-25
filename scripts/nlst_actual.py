@@ -151,8 +151,8 @@ def main():
 
         # Add the sybil data split.
         # 0=train, 1=development, 2=test, 3=unseen
-        split = data_split.loc[data_split["pid"] == row["pid"]][
-            "split"]
+        split = data_split.loc[data_split["PID"] == row["pid"]][
+            "SPLIT"]
         if split.size == 0: # Not found in the split
             current_row.append(99)
         else:

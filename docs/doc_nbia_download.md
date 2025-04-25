@@ -1,6 +1,6 @@
 # Documentation: How to download NLST CT data from the Cancer Imaging Archive
 
-*Last edited 11/21/2023 by Abdul Zakkar*
+*Last edited 03/11/2025 by Vikram Harikrishnan*
 
 This document details the process of obtaining all CT scans of patients who were part of the low-dose CT scan arm of the National Lung Screening Trial (NLST). The instructions here are specific for servers with the PBS job service, as well as available use of the Apptainer container software. This is available to users of the University of Illinois at Chicago's Extreme Cluster.
 
@@ -21,9 +21,13 @@ This document details the process of obtaining all CT scans of patients who were
 nano nbia_retriever.def
 ```
 - Next, paste the contents of [this document](../extras/nbia_retriever.def), and save your document using Ctrl-X, then y.
+- Start an interative session with compute node with the following command. Only compute node has apptainer for some reason.
+```
+salloc --nodes=1 --cpus-per-task=1 --time=00:10:00 -p batch
+```
 - Ensure that Apptainer is available for use by loading the module:
 ```
-module load Apptainer
+module load apptainer
 ```
 - Next, create the container image:
 ```
@@ -55,3 +59,7 @@ printf '%s\n' y | ./nbia_retriever.sif -c /projects/com_shared/azakka2/nlst/mani
 - Due to the extremely large size of the data, it may be better to divide the download into multiple jobs that can all run simultaneously, downloading only a portion of the full dataset.
 - Linked [here](../extras/nbia_nlst_job.pbs) is an example of a PBS job to perform this download.
 - You can use a manifest `.tcia` file which does not contain the full dataset, but selecting only certain files from the [NBIA Search](https://nlst.cancerimagingarchive.net/nbia-search/), which can be accessed on [this page](https://wiki.cancerimagingarchive.net/display/NLST) for NLST, as the Search button in the "Radiology CT Images" row of the Data Access table. 
+
+
+
+*Refer to [this document](https://github.com/saluic/ai_he_lcs/blob/main/docs/doc_nbia_download_chunked.md) to download NLST data in chunks.*
