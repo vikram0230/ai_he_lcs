@@ -86,15 +86,15 @@ def main():
         transform=transform
     )
     
-    batch_size = 2
-
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    batch_size = 4
+    
+    dataloader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn)
 
     # Initialize the model
     model = DinoVisionTransformerCancerPredictor()
 
     # Set up loss function and optimizer
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     # Add learning rate scheduler
@@ -151,8 +151,10 @@ def main():
                 # Use AMP
                 with torch.amp.autocast(device_type=device.type):
                     outputs = model(inputs, positions, attention_masks)
-                    print(f"Outputs shape: {outputs.shape}")
-                    loss = criterion(outputs, labels)
+                    print(f"Outputs shape: {outputs.shape}, Outputs: {outputs} :: Label: {labels}")
+                    probabilities = torch.sigmoid(outputs)
+                    print(f"probabilities: {probabilities}")
+                    loss = criterion(probabilities, labels)
                 
                 # Scale loss and backward
                 scaler.scale(loss).backward()

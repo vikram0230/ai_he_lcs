@@ -26,10 +26,10 @@ echo "Running on host: $(hostname)"
 echo "GPU assigned: $CUDA_VISIBLE_DEVICES"
 
 # Install requirements
-pip install -r requirements.txt
+# pip install -r requirements.txt
 
 # Run the training script
-python dinov2_train.py
+python training/dinov2_train.py
 
 # Print completion message
 echo "Job finished at $(date)" 

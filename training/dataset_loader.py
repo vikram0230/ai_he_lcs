@@ -158,7 +158,8 @@ class PatientDicomDataset(Dataset):
             (self.labels_df['pid'] == int(patient_id)) & 
             (self.labels_df['study_yr'] == int(study_yr))
         ].iloc[0, [6,10]].values
+        
         patient_labels = torch.tensor(patient_labels, dtype=torch.float32)
-        print(f"Got labels for Patient ID: {patient_id}, Study Year: {study_yr}")
+        print(f"Got labels for Patient ID: {patient_id}, Study Year: {study_yr} => Patient Labels: {patient_labels}")
         
         return patient_tensor, slice_positions, patient_labels

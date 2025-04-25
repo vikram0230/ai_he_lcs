@@ -32,8 +32,11 @@ class ReconstructionAttention(nn.Module):
     
     def forward(self, recon_features):
         # recon_features: [batch, num_recon, features]
+        print(f"recon_features shape: {recon_features.shape}")
         attention_scores = self.attention(recon_features)  # [batch, num_recon, 1]
+        print(f"attention_scores shape: {attention_scores.shape}")
         attention_weights = torch.softmax(attention_scores, dim=1)  # normalize across reconstructions
+        print(f"attention_weights shape: {attention_weights.shape}")
         return attention_weights
 
 
@@ -41,9 +44,11 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
     def __init__(self):
         super().__init__()
         self.transformer = deepcopy(dinov2_vits14)
+        for param in self.transformer.parameters():
+            param.requires_grad = False
         self.position_encoding = AnatomicalPositionEncoding(384)
         
-        # Process sequence of slice features
+        # Process sequence of slice features    
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=384,
             nhead=8,
@@ -63,7 +68,7 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2)
+            nn.Linear(128, 2),
         )
         self.reconstruction_attention = ReconstructionAttention()
 
@@ -106,11 +111,13 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
                 slice_sequence,
                 src_key_padding_mask=key_padding_mask
             )
+            print(f"processed_sequence shape: {processed_sequence.shape}")
             
             # Attention pooling with masking
             if attention_mask is not None:
                 mask = mask.unsqueeze(1)  # [B, 1, S]
                 processed_sequence = processed_sequence * mask.unsqueeze(-1)
+            print(f"processed_sequence shape: {processed_sequence.shape}")
             
             # Pool features
             recon_feature = processed_sequence.mean(dim=1)  # [B, feature_dim]
@@ -121,13 +128,21 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
         
         # Apply reconstruction attention
         if attention_mask is not None:
+            print(f"attention_mask shape: {attention_mask.shape}")
             recon_mask = (attention_mask.sum(dim=-1) > 0).float()  # [B, R]
-            attention_weights = self.reconstruction_attention(recon_features) * recon_mask.unsqueeze(-1)
-            attention_weights = attention_weights / (attention_weights.sum(dim=1, keepdim=True) + 1e-9)
-        else:
+            print(f"recon_mask shape: {recon_mask.shape}")
             attention_weights = self.reconstruction_attention(recon_features)
+            print(f"attention_weights shape: {attention_weights.shape}")
+            attention_weights = attention_weights * recon_mask.unsqueeze(-1).unsqueeze(-1)
+            attention_weights = attention_weights / (attention_weights.sum(dim=1, keepdim=True) + 1e-9)
+            print(f"attention_weights shape after masking: {attention_weights.shape}")
+        else:
+            print(f"recon_features shape: {recon_features.shape}")
+            attention_weights = self.reconstruction_attention(recon_features)
+            print(f"attention_weights shape: {attention_weights.shape}")
         
-        combined_features = torch.sum(attention_weights * recon_features, dim=1)
+        combined_features = torch.sum(attention_weights * recon_features, dim=(1,2))
+        print(f"combined_features shape: {combined_features.shape}")
         return self.predictor(combined_features)
 
     def predict_probabilities(self, x):

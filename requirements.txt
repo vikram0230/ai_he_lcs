@@ -6,3 +6,4 @@ numpy
 pandas
 dinov2
 timm
+xformers
