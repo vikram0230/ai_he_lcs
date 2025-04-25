@@ -62,4 +62,4 @@ printf '%s\n' y | ./nbia_retriever.sif -c /projects/com_shared/azakka2/nlst/mani
 
 
 
-*Refer to [this document](ai_he_lcs/blob/main/docs/doc_nbia_download_chunked.md) to download NLST data in chunks.*
+*Refer to [this document](docs/doc_nlst_download_chunked.md) to download NLST data in chunks.*
