@@ -1,6 +1,6 @@
-# Documentation: How to run Sybil on the UIC Extreme Cluster
+# Documentation: How to run Sybil on the UIC Lakeshore
 
-*Last updated 11/20/2023 by Abdul Zakkar*
+*Last updated 03/07/2025 by Vikram Harikrishnan*
 
 **Disclaimer:** NetID access to the Extreme Cluster is required to follow this tutorial. If you do not have access, you may request access [here](https://acer.uic.edu/get-started/request-access/).
 
@@ -9,155 +9,174 @@
 - Download sybil_demo_data.
 - This file contains an ordered list of many .dcm files and represents the format of input which should be provided to the Sybil neural network.
 
-### 2. Uploading a DICOM to the Extreme Cluster
-- If your DICOM is a local file on your hardware, these are the steps for moving them to the extreme cluster (if your NetID has access).
+### 2. Uploading a DICOM to the Lakeshore
+- If your DICOM is a local file on your hardware, these are the steps for moving them to lakeshore (if your NetID has access).
 - Using your terminal/command line, we will use **Secure Copy (scp)**.  
+
+**Windows:**
 - Windows does not have scp support by default, but this could be mitigated by using [openSSH](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse?tabs=gui), or by using the Git command line. Many other options exist.
-- **I use [Git](https://git-scm.com/) command line, since I find it to be the most straightforward for my purposes.**
+- I personally found [WinSCP](https://winscp.net/eng/index.php) to be easy to setup.
+- [Git](https://git-scm.com/) command line should also be useful for this purpose.
+
+**Mac/Linux:**
 - Type the following: 
 ```
-scp -r path/to/directory netid@login-1.extreme.acer.uic.edu:/path
+scp -r path/to/directory netid@lakeshore.acer.uic.edu:/path/to/directory
 ```
 - Example:
 ```
-scp -r sybil_demo_data azakka2@login-1.extreme.acer.uic.edu:/home/azakka2
+scp -r sybil_demo_data azakka2@lakeshore.acer.uic.edu:/home/azakka2
 ```
 - Follow the password prompts.
 
-### 3. Accessing the Extreme Cluster
-Assuming your NetID has been granted access to the extreme cluster, the steps are as follows:
+### 3. Accessing Lakeshore
+Assuming your NetID has been granted access to lakeshore, you can access it on **Terminal** or **VS Code**.
+
+The steps are as follows:
 
 **Windows:**
-- First, download PuTTY. [PuTTY download page here.](https://putty.org/)
-- Enter the following into the Host Name field: 
-```
-netid@login-1.extreme.acer.uic.edu
+
+- Open Terminal/command line.
+- Type the following: 
+
+```bash
+ssh -m hmac-sha2-512 netid@lakeshore.acer.uic.edu
 ```
 - Follow password prompts.
+
+OR
+
+- Download PuTTY. [PuTTY download page here.](https://putty.org/)
+- Make sure the connection type is SSH.
+- Enter the following into the Host Name field: 
+```
+netid@lakeshore.acer.uic.edu
+```
+- Follow password prompts.
+  
+For more information on PuTTY, refer to [ACER Documentation](https://confluence.acer.uic.edu/display/KB/Logging+into+the+Cluster). *Make sure you are connected to [UIC VPN](https://it.uic.edu/services/faculty-staff/uic-network/uic-vpn/) to access this page.*
+
 - If [Git](https://git-scm.com/) command line is used, then you can follow the same steps as Mac/Linux.
 
 **Mac/Linux:**
 - Open Terminal/command line.
 - Type the following: 
+ 
 ```
-ssh netid@login-1.extreme.acer.uic.edu
+ssh netid@lakeshore.acer.uic.edu
 ```
+
 - Follow password prompts.
 
-### 4. Getting the latest Sybil Image
-- Enter the following lines of code:
+**VS Code:**
+
+- Press `F1` or `Ctrl+Shift+P` (Windows/Linux) / `Cmd+Shift+P` (macOS) to open the Command Palette.
+- Type "Remote-SSH: Connect to Host..." and select it from the list.
+- Choose "+ Add New SSH Host..." if your server is not listed.
+- Enter the SSH connection command in the format: 
+  
+```bash
+ssh netid@lakeshore.acer.uic.edu
 ```
-module load Apptainer
-apptainer pull docker://mitjclinic/sybil
+
+- Select a configuration file to update (usually the first option).
+- Click on the blue "><" icon in the lower-left corner of VS Code.
+- Select "Remote-SSH: Connect to Host..." from the menu.
+- Choose `lakeshore.acer.uic.edu` from the list.
+- Enter your password when prompted.
+
+### 4. Clone the Sybil Repository:
+```bash
+git clone https://github.com/reginabarzilaygroup/Sybil.git
+cd Sybil
 ```
-- This should result in having `sybil_latest.sif` available on the Extreme Cluster.
-- This can be verified by typing the following:
+
+### 5. Setup the Environment:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Or .\.venv\Scripts\activate on Windows
+pip install build
+python -m build
+pip install -e .  # Or pip install dist/*.whl
 ```
-ls
+
+### 6. Verify Installation:
+
+After installation, try running:
+
+```bash
+sybil-predict --help
 ```
+
+- If the command is recognized, it confirms that the installation and entry point setup were successful.
 - You should also see sybil_demo_data if you followed the prior optional step.
 
-### 5. Setting up `main.py`
-- Sybil is built in Python and requires a Python script called `main.py` to be used as a starting point for program execution.
-- First, we will create a new file in the extreme cluster. Type the following:
+### 7. Running the model:
+
+After verifing the installation of Sybil, run the following command to get inference from the model:
+
+```bash
+sybil-predict ../sybil_demo_data --output-dir ../output --file-type dicom
 ```
-nano main.py
+
+The resulting output should include the following:
 ```
-- Then, copy-paste the contents **below** into your terminal/command line.
+{
+  "predictions": [
+    [
+      0.37779576815811844,
+      0.46321693657219976,
+      0.5267677947638203,
+      0.5485210415170675,
+      0.5876559385527592,
+      0.6707708482179324
+    ]
+  ]
+}
 ```
-# main.py
 
-from sybil import Serie, Sybil
-from os import listdir
+## Running Sybil Model as a Slurm Job
+Lakeshore allows users to submit scripts as jobs, and this performs multiple high-performance tasks simultaneously.
+Learn more about creating a Slurm job [here](https://slurm.schedmd.com/documentation.html).
 
-# Load a trained model
-model = Sybil("sybil_ensemble") 
-# can also use "sybil_base" (1 model vs ensemble of 5)
+- Create a file `sybil_inference.sh`
 
-dir_name = "sybil_demo_data" # EDIT THIS TO MATCH YOUR DIRECTORY
-# This is the name of the directory containing the dicoms.
-
-# Get risk scores
-serie = Serie([dir_name + "/" + i for i in listdir(dir_name)])
-scores = model.predict([serie])
-
-print(scores)
+```bash
+nano sybil_inference.sh
 ```
-- Press Ctrl-X, then Y to confirm saving the file.
 
-### 6. Running the Sybil Model as a PBS job
-- The Extreme Cluster allows users to submit scripts as jobs, and this perform multiple high-performance tasks simultaneously.
-- The best way to create a job is to start with a PBS script. Let's create one.
-```
-nano sybil_job.pbs
-```
-- Copy-paste the contents below. Each line is also explained. [This](https://latisresearch.umn.edu/creating-a-PBS-script) is also a good resource to learn more about PBS job scripts.
-```
-# Specifies that the job be submitted to the batch queue.
-#PBS -q batch
+- Copy-paste the following code and make necessary changes.
 
-# Requests 1 node and 1 processor per node.
-#PBS -l nodes=1:ppn=1
+```bash
+#!/bin/bash
 
-# Sets max walltime for the job to 1 hour.
-#PBS -l walltime=1:00:00
+#SBATCH --job-name=sybil
+#SBATCH --output=path/to/output.out
+#SBATCH --error=path/to/error_log.err
+#SBATCH --time=00:20:00
+#SBATCH --mem=16G
+#SBATCH --cpus-per-task=8
 
-# Sets the name of the job as displayed by qstat.
-#PBS -N sybil
+# Activate virtual environment
+source .venv/bin/activate
 
-# Sends standard output to sybil.out.
-#PBS -o sybil.out
+dicom_dir="path/to/dicom/images"
+output_dir="path/to/output"
 
-# Merge output and error files.
-#PBS -j oe
+# Running Sybil inference
+sybil-predict "$dicom_dir" --output-dir "$output_dir" --file-type dicom
 
-# Sends email on job abort, begin, and end.
-#PBS -m abe
-
-# Specifies email address to which mail should be sent.
-#PBS -M netid@uic.edu
-
-# Start the job in the current working directory.
-cd $PBS_O_WORKDIR/
-
-# Load the Apptainer module which allows us to use Sybil.
-module load Apptainer
-
-# Run Sybil.
-./sybil_latest.sif
+echo "Sybil predict completed successfully."
 ```
-- Press Ctrl-X, then Y to confirm saving the file.
-- Next, run this job with the following command:
-```
-qsub sybil_job.pbs
-```
-- Sybil should now be running, calculating prediction scores for your DICOM.
-- You can check the status of your job with this command:
-```
-qstat
-```
-- Under the Job State column, you will see `R`  if it is running, or `C` if it is complete.
-- The result of the job should be stored in `sybil.out`, since this is what we named our output file in the PBS job.
-- We can view the contents of this output with this command:
-```
-cat sybil.out
-``` 
-- The resulting output should include the following:
-```
-Prediction(scores=[[0.0033378278896217693, 0.01461589983420139,
-0.02436322603858815, 0.033144887056502856, 0.040198648409035156,
-0.060580642990126575]])
-```
-- The 6 numbers listed are each probability of cancer diagnosis 1 year, 2 years, … , and 6 years after diagnosis.
 
-### Addendum:
-- In order to submit Sybil jobs in batches, I needed a way to pass a directory to Sybil via the terminal.
-- I created a new Apptainer image called `sybil_dir.sif`, which allows the user to run the image as such:
-```
-./sybil_dir.sif /path/to/dicom/directory
-```
-- This allows multiple PBS jobs to be set up with each job referencing a different directory.
-- I was able to create this custom image by using a new definition file.
-	- This new file uses local image bootstrapping and applies a new runscript which facilitates the inclusion of a directory argument.
-- Sybil's `main.py` (see `doc_sybil_main_py.md` [here](doc_sybil_main_py.md)) was then also modified to be able to handle a directory argument, by using `sys.argv[1]`.
+- Run this script using this command:
 
+```bash
+sbatch sybil_inference.sh
+```
+
+To know the status of the running Slurm job, run this command:
+
+``` bash
+squeue
+```
