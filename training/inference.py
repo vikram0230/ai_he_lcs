@@ -3,7 +3,6 @@ import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from dataset_loader import PatientDicomDataset
-from classifier import DinoVisionTransformerCancerPredictor
 import mlflow
 import mlflow.pytorch
 import numpy as np
@@ -113,7 +112,7 @@ def main():
     print(f"Using device: {device}")
     
     # Load model from MLflow
-    run_id = '72eb8cc3f14c4d8a80409b540ffbfd9c'
+    run_id = 'a43d76149b344f99901dccafbad2d0fb'
     model = load_model_from_mlflow(run_id)
     model = model.to(device)
     model.eval()
@@ -130,7 +129,7 @@ def main():
         root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_test_data',
         labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
         transform=transform,
-        patients_count=10
+        patients_count=50
     )
     
     test_loader = DataLoader(

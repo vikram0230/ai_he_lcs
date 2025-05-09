@@ -12,6 +12,11 @@ import datetime
 import mlflow
 import mlflow.pytorch
 from mlflow.tracking import MlflowClient
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 
 
 # Create data loader with collate function to handle variable number of slices
@@ -326,12 +331,126 @@ def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, d
         
         return model, avg_loss, training_duration
 
+def calculate_metrics(y_true, y_pred, y_prob):
+    """Calculate various classification metrics."""
+    metrics = {}
+    
+    # Convert predictions to binary
+    y_pred_binary = (y_pred > 0.5).astype(int)
+    
+    # Calculate metrics for each class (1st year and 5th year)
+    for i, year in enumerate(['1st_year', '5th_year']):
+        metrics[f'{year}_accuracy'] = accuracy_score(y_true[:, i], y_pred_binary[:, i])
+        metrics[f'{year}_precision'] = precision_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
+        metrics[f'{year}_recall'] = recall_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
+        metrics[f'{year}_f1'] = f1_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
+        metrics[f'{year}_auc'] = roc_auc_score(y_true[:, i], y_prob[:, i])
+        
+        # Calculate confusion matrix
+        cm = confusion_matrix(y_true[:, i], y_pred_binary[:, i])
+        metrics[f'{year}_confusion_matrix'] = cm
+    
+    return metrics
+
+def run_inference_and_log_metrics(model, test_dataset, device, mlflow_run):
+    """Run inference on test dataset and log metrics to MLflow."""
+    print("\nRunning inference on test dataset...")
+    
+    # Create test dataloader
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=4, 
+        collate_fn=collate_fn, 
+        shuffle=False
+    )
+    
+    # Initialize lists to store predictions and true labels
+    all_predictions = []
+    all_probabilities = []
+    all_true_labels = []
+    
+    # Perform inference
+    model.eval()
+    with torch.no_grad():
+        for batch in tqdm(test_loader):
+            inputs = batch['images'].to(device)
+            positions = batch['positions'].to(device)
+            labels = batch['labels'].float().to(device)
+            attention_masks = batch['attention_mask'].to(device)
+            
+            # Get model predictions
+            outputs = model(inputs, positions, attention_masks)
+            probabilities = torch.sigmoid(outputs)
+            
+            # Store predictions and true labels
+            all_predictions.append(outputs.cpu().numpy())
+            all_probabilities.append(probabilities.cpu().numpy())
+            all_true_labels.append(labels.cpu().numpy())
+    
+    # Concatenate all predictions and labels
+    all_predictions = np.concatenate(all_predictions, axis=0)
+    all_probabilities = np.concatenate(all_probabilities, axis=0)
+    all_true_labels = np.concatenate(all_true_labels, axis=0)
+    
+    # Calculate metrics
+    metrics = calculate_metrics(all_true_labels, all_predictions, all_probabilities)
+    
+    # Log metrics to MLflow
+    for year in ['1st_year', '5th_year']:
+        mlflow.log_metrics({
+            f'test_{year}_accuracy': metrics[f'{year}_accuracy'],
+            f'test_{year}_precision': metrics[f'{year}_precision'],
+            f'test_{year}_recall': metrics[f'{year}_recall'],
+            f'test_{year}_f1': metrics[f'{year}_f1'],
+            f'test_{year}_auc': metrics[f'{year}_auc']
+        })
+    
+    # Plot and log confusion matrices
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Plot 1st year confusion matrix
+    sns.heatmap(metrics['1st_year_confusion_matrix'], 
+                annot=True, fmt='d', cmap='Blues', ax=ax1)
+    ax1.set_title('1st Year Prediction')
+    ax1.set_xlabel('Predicted')
+    ax1.set_ylabel('Actual')
+    
+    # Plot 5th year confusion matrix
+    sns.heatmap(metrics['5th_year_confusion_matrix'], 
+                annot=True, fmt='d', cmap='Blues', ax=ax2)
+    ax2.set_title('5th Year Prediction')
+    ax2.set_xlabel('Predicted')
+    ax2.set_ylabel('Actual')
+    
+    plt.tight_layout()
+    
+    # Save confusion matrices plot to MLflow
+    confusion_matrix_path = 'confusion_matrices.png'
+    plt.savefig(confusion_matrix_path)
+    plt.close()
+    mlflow.log_artifact(confusion_matrix_path)
+    
+    # Print metrics
+    print("\nTest Results:")
+    print("-" * 50)
+    for year in ['1st_year', '5th_year']:
+        print(f"\n{year.upper()} PREDICTIONS:")
+        print(f"Accuracy: {metrics[f'{year}_accuracy']:.4f}")
+        print(f"Precision: {metrics[f'{year}_precision']:.4f}")
+        print(f"Recall: {metrics[f'{year}_recall']:.4f}")
+        print(f"F1 Score: {metrics[f'{year}_f1']:.4f}")
+        print(f"AUC-ROC: {metrics[f'{year}_auc']:.4f}")
+        print("\nConfusion Matrix:")
+        print(metrics[f'{year}_confusion_matrix'])
+    
+    return metrics
+
 def main():
     # Setup MLflow
     experiment_id = setup_mlflow()
     
     # Start MLflow run for new training
-    with mlflow.start_run(run_name=f"frozen_dinov2_run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    with mlflow.start_run(run_name=f"frozen_dinov2_run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}") as mlflow_run:
         # Set up data transformations
         transform = transforms.Compose([
             transforms.Resize((224, 224)),
@@ -339,12 +458,20 @@ def main():
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
-        # Load dataset
+        # Load datasets
         full_dataset = PatientDicomDataset(
             root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_train_data',
             labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
             transform=transform,
-            patients_count=100
+            patients_count=200
+        )
+        
+        # Load test dataset
+        test_dataset = PatientDicomDataset(
+            root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_test_data',
+            labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
+            transform=transform,
+            patients_count=50
         )
         
         # Split dataset into train and validation
@@ -377,11 +504,11 @@ def main():
 
         # Add early stopping
         best_val_loss = float('inf')
-        patience = 3
+        patience = 5
         patience_counter = 0
 
         # Training loop
-        num_epochs = 10
+        num_epochs = 100
         pos_weight = torch.tensor([112.83, 34.30])
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device), reduction='mean')
         
@@ -586,6 +713,23 @@ def main():
         print(f"Training Duration: {training_duration}")
         print(f"Final Validation Loss: {final_loss:.4f}")
         print(f"Best Validation Loss: {best_val_loss:.4f}")
+
+        # After training is complete, run inference and log metrics
+        print("\nRunning final inference and logging metrics...")
+        test_metrics = run_inference_and_log_metrics(
+            model=model.module if isinstance(model, nn.DataParallel) else model,
+            test_dataset=test_dataset,
+            device=device,
+            mlflow_run=mlflow_run
+        )
+        
+        print("\nTraining and evaluation complete!")
+        print(f"Best validation loss: {best_val_loss:.4f}")
+        print("\nTest Metrics Summary:")
+        for year in ['1st_year', '5th_year']:
+            print(f"\n{year.upper()}:")
+            print(f"Accuracy: {test_metrics[f'{year}_accuracy']:.4f}")
+            print(f"AUC-ROC: {test_metrics[f'{year}_auc']:.4f}")
 
 if __name__ == "__main__":
     main()
