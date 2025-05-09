@@ -44,11 +44,22 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
     def __init__(self):
         super().__init__()
         self.transformer = deepcopy(dinov2_vits14)
+        
+        # Freeze all parameters
         for param in self.transformer.parameters():
             param.requires_grad = False
+        print(f"Running with frozen DINOv2")
+
+        # Unfreeze the last few layers of DINOv2
+        # for name, param in self.transformer.named_parameters():
+        #     if 'blocks.11' in name or 'blocks.10' in name or 'blocks.9' in name:
+        #         param.requires_grad = True
+        #     else:
+        #         param.requires_grad = False
+        # print(f"Running with unfrozen last few layers of DINOv2")
         self.position_encoding = AnatomicalPositionEncoding(384)
         
-        # Process sequence of slice features    
+        # Process sequence of slice features
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=384,
             nhead=8,
@@ -63,13 +74,16 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
         
         self.predictor = nn.Sequential(
             nn.Linear(384, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(128, 2),
         )
+        
         self.reconstruction_attention = ReconstructionAttention()
 
     def forward(self, x, slice_positions, attention_mask=None):

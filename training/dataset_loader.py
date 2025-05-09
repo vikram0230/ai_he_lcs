@@ -7,7 +7,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 class PatientDicomDataset(Dataset):
-    def __init__(self, root_dir, labels_file, transform=None):
+    def __init__(self, root_dir, labels_file, patients_count=500, transform=None):
         """
         Args:
             root_dir (str): Directory containing patient folders
@@ -27,9 +27,32 @@ class PatientDicomDataset(Dataset):
         # Get list of patient folders
         patient_folders = [f for f in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, f))]
         patient_folders.sort()
-        print(f"Found {len(patient_folders)} patient folders")
+        
+        # Split patients into positive and negative cases
+        positive_patients = []
+        negative_patients = []
         
         for patient_id in patient_folders:
+            patient_records = self.labels_df[self.labels_df['pid'] == int(patient_id)]
+            if not patient_records.empty:
+                # Check if any record has days_to_diagnosis > 0
+                if (patient_records['days_to_diagnosis'] > 0).any():
+                    positive_patients.append(patient_id)
+                else:
+                    negative_patients.append(patient_id)
+        
+        print(f"Found {len(positive_patients)} positive cases and {len(negative_patients)} negative cases")
+        
+        # Calculate how many patients to take from each group
+        half_count = patients_count // 2
+        positive_patients = positive_patients[:half_count]
+        negative_patients = negative_patients[:half_count]
+        
+        # Combine the selected patients
+        selected_patients = positive_patients + negative_patients
+        print(f"Selected {len(selected_patients)} patients ({len(positive_patients)} positive, {len(negative_patients)} negative)")
+        
+        for patient_id in selected_patients:
             patient_dir = os.path.join(root_dir, patient_id)
             
             # Get all scan dates for this patient
@@ -46,8 +69,8 @@ class PatientDicomDataset(Dataset):
                 date_str = scan_date[:10]  # Get '01-02-1999' from '01-02-1999-NLST-LSS-55322'
                 date_parts = date_str.split('-')
                 # Convert to YYYY-MM-DD format for proper sorting
-                sorted_date = f"{date_parts[2]}-{date_parts[0]}-{date_parts[1]}"
-                date_folders[scan_date] = sorted_date
+                formatted_date = f"{date_parts[2]}-{date_parts[0]}-{date_parts[1]}"
+                date_folders[scan_date] = formatted_date
             
             # Sort dates and assign study years
             sorted_dates = sorted(date_folders.items(), key=lambda x: x[1])  # Sort by YYYY-MM-DD
@@ -94,8 +117,9 @@ class PatientDicomDataset(Dataset):
         # Create flat list of (patient_id, study_yr) pairs
         self.scan_list = [(pid, yr) for pid in self.patient_scans 
                          for yr in self.patient_scans[pid].keys()]
-        # self.scan_list.sort()
         print(f"Final dataset size: {len(self.scan_list)} scans")
+        print(f"Positive cases: {len([pid for pid, _ in self.scan_list if pid in positive_patients])}")
+        print(f"Negative cases: {len([pid for pid, _ in self.scan_list if pid in negative_patients])}")
     
     def __len__(self):
         return len(self.scan_list)
