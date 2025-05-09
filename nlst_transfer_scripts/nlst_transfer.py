@@ -4,18 +4,20 @@
 NLST Data Transfer Script
 
 This script facilitates the transfer of NLST (National Lung Screening Trial) data between Globus endpoints.
-It supports transferring both training and test datasets with configurable set sizes.
+It supports transferring both training and test datasets with configurable set sizes and diagnosis status.
 
 Usage:
-    python nlst_transfer.py <data_type> <set_size>
+    python nlst_transfer.py <data_type> <set_size> [diagnosis]
     
     Arguments:
         data_type: Specify 'train' or 'test' to select the dataset type
         set_size: Number of PIDs to transfer from the selected dataset
+        diagnosis: Optional. Specify 'positive' or 'negative' to filter by diagnosis status
 
 Example:
     python nlst_transfer.py train 100  # Transfer first 100 PIDs from training set
-    python nlst_transfer.py test 50   # Transfer first 50 PIDs from test set
+    python nlst_transfer.py test 50 positive  # Transfer first 50 positive PIDs from test set
+    python nlst_transfer.py train 75 negative  # Transfer first 75 negative PIDs from training set
 """
 
 import os
@@ -26,9 +28,11 @@ import argparse
 from dotenv import load_dotenv
 from globus_connect import GlobusConnect
 from globus_sdk import TransferAPIError
+from datetime import datetime
 
 # Configure logging
-log_file = f'logs/nlst_transfer/{os.path.basename(__file__)}_{os.getpid()}.log'
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+log_file = f'logs/nlst_transfer/{os.path.basename(__file__)}_{timestamp}.log'
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -63,6 +67,25 @@ def get_test_pids():
     test_pids = pid_df[pid_df['SPLIT'] == 'test']['PID'].tolist()
     logger.info(f"Found {len(test_pids)} PIDs in test set")
     return test_pids
+
+def get_diagnosis_pids(diagnosis: str) -> list[int]:
+    """
+    Get the list of PIDs based on diagnosis status.
+    
+    Args:
+        diagnosis: 'positive' or 'negative' to filter PIDs
+        
+    Returns:
+        list: List of PIDs matching the diagnosis criteria
+    """
+    actual_df = pd.read_csv('nlst_actual.csv')
+    # Get unique PIDs where days_to_diagnosis matches the criteria
+    if diagnosis == 'positive':
+        pids = actual_df[actual_df['days_to_diagnosis'] > 0]['pid'].unique().tolist()
+    else:  # negative
+        pids = actual_df[actual_df['days_to_diagnosis'] < 0]['pid'].unique().tolist()
+    logger.info(f"Found {len(pids)} PIDs with {diagnosis} diagnosis")
+    return pids
 
 def transfer_data(pids: list[int], dest_dir: str):
     ENV_PATH = "/home/vhari/dom_ameen_chi_link/vhari/.env"
@@ -160,18 +183,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer data for a specified set size and type.")
     parser.add_argument("data_type", type=str, help="Specify the data type as 'train' or 'test'.")
     parser.add_argument("set_size", type=int, help="Specify the size of the set.")
+    parser.add_argument("diagnosis", type=str, nargs='?', choices=['positive', 'negative'],
+                      help="Optional: Specify 'positive' or 'negative' to filter by diagnosis status")
     args = parser.parse_args()
 
     data_type = args.data_type.lower()
     set_size = args.set_size
+    diagnosis = args.diagnosis
 
+    # Get base PIDs based on data type
     if data_type == 'train':
         pids = get_train_pids()
         dest_dir = 'nlst_train_data'
-        transfer_data(pids[:set_size], dest_dir)
     elif data_type == 'test':
         pids = get_test_pids()
         dest_dir = 'nlst_test_data'
-        transfer_data(pids[:set_size], dest_dir)
     else:
         logger.error("Invalid data type. Please specify 'train' or 'test'.")
+        sys.exit(1)
+
+    # Filter by diagnosis if specified
+    if diagnosis:
+        diagnosis_pids = set(get_diagnosis_pids(diagnosis))
+        pids = [pid for pid in pids if pid in diagnosis_pids]
+        logger.info(f"Filtered to {len(pids)} PIDs with {diagnosis} diagnosis")
+
+    transfer_data(pids[:set_size], dest_dir)

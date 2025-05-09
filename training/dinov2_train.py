@@ -15,7 +15,7 @@ from mlflow.tracking import MlflowClient
 
 
 # Create data loader with collate function to handle variable number of slices
-def collate_fn(batch): 
+def collate_fn(batch):
     print("\nBatch contents:")
     # for i, (img, pos, label) in enumerate(batch):
     #     print(f"Item {i}: Image shape: {img.shape}, Positions shape: {pos.shape}")
