@@ -7,3 +7,9 @@ pandas
 dinov2
 timm
 xformers
+globus-sdk>=3.0.0
+mlflow
+scikit-learn
+seaborn
+matplotlib
+tqdm

@@ -1,13 +1,21 @@
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from torch import nn, optim
 from classifier import DinoVisionTransformerCancerPredictor
 from dataset_loader import PatientDicomDataset
+import csv
+import datetime
+import mlflow
+import mlflow.pytorch
+from mlflow.tracking import MlflowClient
 
 
 # Create data loader with collate function to handle variable number of slices
-def collate_fn(batch):
+def collate_fn(batch): 
     print("\nBatch contents:")
     # for i, (img, pos, label) in enumerate(batch):
     #     print(f"Item {i}: Image shape: {img.shape}, Positions shape: {pos.shape}")
@@ -71,139 +79,513 @@ def collate_fn(batch):
         'attention_mask': torch.stack(attention_masks)  # [batch, max_recon, max_slices]
     }
 
-def main():
-    # Set up data transformations
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
 
-    # Load dataset
-    dataset = PatientDicomDataset(
-        root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_cancer_imaging_archive',
-        labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
-        transform=transform
-    )
+def save_checkpoint(model, optimizer, epoch, loss, path):
+    """Save model checkpoint with training state."""
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+    }
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(checkpoint, path)
+    print(f"Checkpoint saved: {path}")
+
+def load_checkpoint(model, optimizer, path):
+    """Load model checkpoint and restore training state."""
+    if os.path.exists(path):
+        checkpoint = torch.load(path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch']
+        best_loss = checkpoint['loss']
+        print(f"Loaded checkpoint from epoch {start_epoch} with loss {best_loss:.4f}")
+        return start_epoch, best_loss
+    return 0, float('inf')
+
+def setup_mlflow():
+    """Setup MLflow tracking."""
+    mlflow.set_tracking_uri("file:./mlruns")
     
-    batch_size = 4
+    # Create a new experiment
+    experiment_name = "DINOv2 Cancer Prediction"
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            experiment_id = mlflow.create_experiment(experiment_name)
+        else:
+            experiment_id = experiment.experiment_id
+    except:
+        experiment_id = mlflow.create_experiment(experiment_name)
     
-    dataloader = DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn)
+    mlflow.set_experiment(experiment_name)
+    return experiment_id
 
-    # Initialize the model
-    model = DinoVisionTransformerCancerPredictor()
+def log_model_config(model, dataset, optimizer, scheduler, criterion, num_epochs, training_duration, final_loss, early_stopping_patience, batch_size):
+    """Log model configuration to MLflow."""
+    
+    # Dynamically extract predictor architecture
+    predictor_layers = []
+    for layer in model.predictor:
+        layer_info = {
+            'type': layer.__class__.__name__,
+        }
+        # Add layer-specific parameters
+        if isinstance(layer, nn.Dropout):
+            layer_info['p'] = layer.p
+        elif isinstance(layer, nn.Linear):
+            layer_info['in_features'] = layer.in_features
+            layer_info['out_features'] = layer.out_features
+        predictor_layers.append(layer_info)
+    
+    config = {
+        'model_name': model.__class__.__name__,
+        'base_model': 'dinov2_vits14',
+        'feature_dim': model.transformer.embed_dim,
+        'num_transformer_layers': len(model.transformer.blocks),
+        'num_slice_processor_layers': model.slice_processor.num_layers,
+        'num_heads': model.slice_processor.layers[0].self_attn.num_heads,
+        'dropout_rate': model.slice_processor.layers[0].dropout.p,
+        'batch_size': batch_size,
+        'learning_rate': optimizer.param_groups[0]['lr'],
+        'optimizer': optimizer.__class__.__name__,
+        'scheduler': scheduler.__class__.__name__,
+        'scheduler_patience': scheduler.patience,
+        'scheduler_factor': scheduler.factor,
+        'min_lr': scheduler.min_lrs[0],
+        'early_stopping_patience': early_stopping_patience,
+        'num_epochs': num_epochs,
+        'pos_weight_1yr': criterion.pos_weight[0].item(),
+        'pos_weight_5yr': criterion.pos_weight[1].item(),
+        'dataset_size': len(dataset),
+        'image_size': '224x224',
+        'normalization_mean': str([0.485, 0.456, 0.406]),
+        'normalization_std': str([0.229, 0.224, 0.225]),
+        'min_slices': 50,
+        'num_outputs': 2,
+        'loss_function': criterion.__class__.__name__,
+        'use_amp': True,
+        'use_gradient_checkpointing': False,
+        'device': str(next(model.parameters()).device),
+        'num_gpus': torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        'predictor_architecture': {
+            'layers': predictor_layers,
+            'total_parameters': sum(p.numel() for p in model.predictor.parameters()),
+            'trainable_parameters': sum(p.numel() for p in model.predictor.parameters() if p.requires_grad)
+        }
+    }
+    
+    # Log all parameters
+    mlflow.log_params(config)
+    
+    # Convert training duration to seconds
+    if isinstance(training_duration, str):
+        # Parse the duration string (format: "HH:MM:SS.microseconds")
+        h, m, s = training_duration.split(':')
+        duration_seconds = float(h) * 3600 + float(m) * 60 + float(s)
+    else:
+        duration_seconds = float(training_duration)
+    
+    # Log final metrics
+    mlflow.log_metrics({
+        'final_loss': final_loss,
+        'training_duration_seconds': duration_seconds
+    })
 
-    # Set up loss function and optimizer
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+def load_model_from_mlflow(run_id, model_name="best_model"):
+    """Load a model from MLflow."""
+    # Load the model
+    model_uri = f"runs:/{run_id}/{model_name}"
+    model = mlflow.pytorch.load_model(model_uri)
+    
+    # Get the run details
+    run = mlflow.get_run(run_id)
+    
+    print(f"Loaded model from run: {run_id}")
+    print(f"Model parameters: {run.data.params}")
+    print(f"Model metrics: {run.data.metrics}")
+    
+    return model
 
-    # Add learning rate scheduler
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-
-    # Add early stopping
-    best_loss = float('inf')
-    patience = 5
-    patience_counter = 0
-
-    # Add checkpointing
-    def save_checkpoint(model, optimizer, epoch, loss, path):
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss,
-        }, path)
-
+def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, device):
+    """Retrain a loaded model with new parameters."""
+    # Move model to device
+    model = model.to(device)
+    
+    # Setup optimizer and scheduler
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5, min_lr=1e-6)
+    
+    # Setup loss function
+    pos_weight = torch.tensor([112.83, 34.30])
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+    
+    # Setup dataloader
+    dataloader = DataLoader(dataset, batch_size=4, collate_fn=collate_fn, shuffle=True)
+    
     # Training loop
-    num_epochs = 10
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-
-    # Enable gradient checkpointing in the transformer
-    # model.transformer.gradient_checkpointing_enable()
-    
-    # Use automatic mixed precision
+    best_loss = float('inf')
+    patience_counter = 0
     scaler = torch.amp.GradScaler()
-
-    print(f"\nStarting training with:")
-    print(f"Batch size: {batch_size}")
-    print(f"Number of epochs: {num_epochs}")
-    print(f"Device: {device}")
-    print("-" * 50)
-
-    for epoch in range(num_epochs):
-        model.train()
-        total_loss = 0
-        batch_count = 0
+    
+    # Start MLflow run for retraining
+    with mlflow.start_run(run_name=f"retrain_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+        # Log retraining parameters
+        mlflow.log_params({
+            'retrain_epochs': num_epochs,
+            'retrain_learning_rate': learning_rate,
+            'retrain_patience': patience,
+            'original_run_id': run_id
+        })
         
-        print(f"\nStarting Epoch {epoch+1}/{num_epochs}")
+        start_time = datetime.datetime.now()
         
-        for batch_idx, batch in enumerate(dataloader):
-            try:
-                print(f"Batch {batch_idx+1} shape: {batch['images'].shape}")
-                inputs = batch['images'].to(device)
-                positions = batch['positions'].to(device)
-                labels = batch['labels'].float().to(device)
-                attention_masks = batch['attention_mask'].to(device)
-                
-                optimizer.zero_grad()
-                
-                # Use AMP
-                with torch.amp.autocast(device_type=device.type):
-                    outputs = model(inputs, positions, attention_masks)
-                    print(f"Outputs shape: {outputs.shape}, Outputs: {outputs} :: Label: {labels}")
-                    probabilities = torch.sigmoid(outputs)
-                    print(f"probabilities: {probabilities}")
-                    loss = criterion(probabilities, labels)
-                
-                # Scale loss and backward
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                
-                batch_loss = loss.item()
-                total_loss += batch_loss
-                
-            except RuntimeError as e:
-                print(f"Error in batch {batch_idx}: {e}")
-                if "out of memory" in str(e):
-                    print(f"OOM in batch {batch_idx}. Clearing cache and skipping...")
-                    if hasattr(torch.cuda, 'empty_cache'):
-                        torch.cuda.empty_cache()
-                    continue
-                raise e
+        for epoch in range(num_epochs):
+            model.train()
+            total_loss = 0
             
-            batch_count += 1
+            for batch_idx, batch in enumerate(dataloader):
+                try:
+                    inputs = batch['images'].to(device)
+                    positions = batch['positions'].to(device)
+                    labels = batch['labels'].float().to(device)
+                    attention_masks = batch['attention_mask'].to(device)
+                    
+                    optimizer.zero_grad()
+                    
+                    with torch.amp.autocast(device_type=device.type):
+                        outputs = model(inputs, positions, attention_masks)
+                        loss = criterion(outputs, labels)
+                    
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    
+                    batch_loss = loss.item()
+                    total_loss += batch_loss
+                    
+                    # Log batch metrics
+                    mlflow.log_metric('retrain_batch_loss', batch_loss, 
+                                    step=epoch * len(dataloader) + batch_idx)
+                    
+                except RuntimeError as e:
+                    print(f"Error in batch {batch_idx}: {e}")
+                    if "out of memory" in str(e):
+                        print(f"OOM in batch {batch_idx}. Exiting program...")
+                        import sys
+                        sys.exit()
+                    else:
+                        raise e
             
-            # Print batch loss every 10 batches
-            # if (batch_idx + 1) % 10 == 0:
-            print(f"Batch {batch_idx+1} Loss: {batch_loss:.4f}")
+            avg_loss = total_loss / len(dataloader)
+            
+            # Log epoch metrics
+            mlflow.log_metrics({
+                'retrain_epoch_loss': avg_loss,
+                'retrain_learning_rate': optimizer.param_groups[0]['lr']
+            }, step=epoch)
+            
+            print(f"\nRetraining Epoch {epoch+1}/{num_epochs} Summary:")
+            print(f"Average Loss: {avg_loss:.4f}")
+            
+            scheduler.step(avg_loss)
+            
+            # Save best model
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+                mlflow.pytorch.log_model(
+                    model,
+                    "retrain_best_model",
+                    registered_model_name="DinoVisionTransformerCancerPredictor"
+                )
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience:
+                print("\nEarly stopping triggered!")
+                break
         
-        avg_loss = total_loss / len(dataloader)
-        print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
-        print(f"Average Loss: {avg_loss:.4f}")
-        print(f"Total batches processed: {batch_count}")
-        print("-" * 50)
+        end_time = datetime.datetime.now()
+        training_duration = str(end_time - start_time)
+        
+        # Log final model
+        mlflow.pytorch.log_model(
+            model,
+            "retrain_final_model",
+            registered_model_name="DinoVisionTransformerCancerPredictor"
+        )
+        
+        # Log final metrics
+        mlflow.log_metrics({
+            'retrain_final_loss': avg_loss,
+            'retrain_duration': training_duration
+        })
+        
+        return model, avg_loss, training_duration
 
-        # Add learning rate scheduler step
-        scheduler.step(avg_loss)
+def main():
+    # Setup MLflow
+    experiment_id = setup_mlflow()
+    
+    # Start MLflow run for new training
+    with mlflow.start_run(run_name=f"frozen_dinov2_run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+        # Set up data transformations
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+        # Load dataset
+        full_dataset = PatientDicomDataset(
+            root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_train_data',
+            labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
+            transform=transform,
+            patients_count=100
+        )
+        
+        # Split dataset into train and validation
+        train_size = int(0.8 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        
+        batch_size = 10
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False)
+
+        # Initialize the model and wrap with DataParallel
+        model = DinoVisionTransformerCancerPredictor()
+        if torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs!")
+            model = nn.DataParallel(model)
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+
+        # Set up loss function and optimizer
+        learning_rate = 0.0001
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        print(f"Optimizer: {optimizer}")
+        print(f"Learning rate: {learning_rate}")
+
+        # Add learning rate scheduler
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5, min_lr=1e-6)
 
         # Add early stopping
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            patience_counter = 0
-        else:
-            patience_counter += 1
+        best_val_loss = float('inf')
+        patience = 3
+        patience_counter = 0
 
-        if patience_counter >= patience:
-            print("\nEarly stopping triggered!")
-            break
+        # Training loop
+        num_epochs = 10
+        pos_weight = torch.tensor([112.83, 34.30])
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device), reduction='mean')
+        
+        # Use automatic mixed precision
+        scaler = torch.amp.GradScaler()
 
-    print("\nTraining complete!")
+        # Add diagnostic function
+        def check_loss_saturation(outputs, labels):
+            with torch.no_grad():
+                # Get probabilities
+                probs = torch.sigmoid(outputs)
+                # Calculate individual losses
+                pos_loss = -labels * torch.log(probs + 1e-10) * pos_weight.to(device)
+                neg_loss = -(1 - labels) * torch.log(1 - probs + 1e-10)
+                total_loss = (pos_loss + neg_loss).mean()
+                
+                # Print diagnostics
+                print("\nLoss Saturation Diagnostics:")
+                print(f"Output range: [{outputs.min():.2f}, {outputs.max():.2f}]")
+                print(f"Probability range: [{probs.min():.2f}, {probs.max():.2f}]")
+                print(f"Positive samples: {labels.sum().item()}")
+                print(f"Average positive probability: {probs[labels == 1].mean():.4f}")
+                print(f"Average negative probability: {probs[labels == 0].mean():.4f}")
+                print(f"Individual losses - Positive: {pos_loss.mean():.4f}, Negative: {neg_loss.mean():.4f}")
+                return total_loss
+        
+        print(f"\nStarting training with:")
+        print(f"Batch size: {batch_size}")
+        print(f"Number of epochs: {num_epochs}")
+        print(f"Device: {device}")
+        print(f"Training samples: {len(train_dataset)}")
+        print(f"Validation samples: {len(val_dataset)}")
+        print("-" * 50)
 
-    # Save the model
-    torch.save(model.state_dict(), 'model/dinov2_cancer_predictor.pth') 
-    print(f"Model saved as: dinov2_cancer_predictor.pth")
-    
+        start_time = datetime.datetime.now()
+        final_loss = None
+
+        for epoch in range(num_epochs):
+            # Training phase
+            model.train()
+            train_loss = 0
+            train_batch_count = 0
+            
+            print(f"\nStarting Epoch {epoch+1}/{num_epochs}")
+            print("Training phase:")
+            
+            for batch_idx, batch in enumerate(train_loader):
+                try:
+                    inputs = batch['images'].to(device)
+                    positions = batch['positions'].to(device)
+                    labels = batch['labels'].float().to(device)
+                    attention_masks = batch['attention_mask'].to(device)
+                    
+                    optimizer.zero_grad()
+                    
+                    with torch.amp.autocast(device_type=device.type):
+                        outputs = model(inputs, positions, attention_masks)
+                        # Add gradient clipping to prevent extreme values
+                        outputs = torch.clamp(outputs, min=-10, max=10)
+                        # Check for saturation
+                        if batch_idx == 0:  # Check first batch of each epoch
+                            check_loss_saturation(outputs, labels)
+                        loss = criterion(outputs, labels)
+                    
+                    # Add gradient clipping
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    
+                    batch_loss = loss.item()
+                    train_loss += batch_loss
+                    train_batch_count += 1
+                    
+                    # Log batch metrics
+                    mlflow.log_metric('train_batch_loss', batch_loss, step=epoch * len(train_loader) + batch_idx)
+                    
+                except RuntimeError as e:
+                    print(f"Error in batch {batch_idx}: {e}")
+                    if "out of memory" in str(e):
+                        print(f"OOM in batch {batch_idx}. Exiting program...")
+                        import sys
+                        sys.exit()
+                    else:
+                        raise e
+                
+                print(f"Batch {batch_idx+1} Loss: {batch_loss:.4f}")
+            
+            avg_train_loss = train_loss / len(train_loader)
+            
+            # Validation phase
+            model.eval()
+            val_loss = 0
+            val_batch_count = 0
+            
+            print("\nValidation phase:")
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(val_loader):
+                    try:
+                        inputs = batch['images'].to(device)
+                        positions = batch['positions'].to(device)
+                        labels = batch['labels'].float().to(device)
+                        attention_masks = batch['attention_mask'].to(device)
+                        
+                        with torch.amp.autocast(device_type=device.type):
+                            outputs = model(inputs, positions, attention_masks)
+                            loss = criterion(outputs, labels)
+                        
+                        batch_loss = loss.item()
+                        val_loss += batch_loss
+                        val_batch_count += 1
+                        
+                        # Log batch metrics
+                        mlflow.log_metric('val_batch_loss', batch_loss, step=epoch * len(val_loader) + batch_idx)
+                        
+                    except RuntimeError as e:
+                        print(f"Error in validation batch {batch_idx}: {e}")
+                        if "out of memory" in str(e):
+                            print(f"OOM in validation batch {batch_idx}. Exiting program...")
+                            import sys
+                            sys.exit()
+                        else:
+                            raise e
+                    
+                    print(f"Validation Batch {batch_idx+1} Loss: {batch_loss:.4f}")
+            
+            avg_val_loss = val_loss / len(val_loader)
+            final_loss = avg_val_loss
+            
+            # Log epoch metrics
+            mlflow.log_metrics({
+                'train_epoch_loss': avg_train_loss,
+                'val_epoch_loss': avg_val_loss,
+                'learning_rate': optimizer.param_groups[0]['lr'],
+                'epoch': epoch + 1
+            }, step=epoch)
+            
+            print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
+            print(f"Average Training Loss: {avg_train_loss:.4f}")
+            print(f"Average Validation Loss: {avg_val_loss:.4f}")
+            print(f"Total training batches: {train_batch_count}")
+            print(f"Total validation batches: {val_batch_count}")
+            print("-" * 50)
+
+            # Add learning rate scheduler step based on validation loss
+            scheduler.step(avg_val_loss)
+
+            # Save best model if validation loss improved
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                patience_counter = 0
+                print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+                
+                # Log best model to MLflow
+                mlflow.pytorch.log_model(
+                    model.module if isinstance(model, nn.DataParallel) else model,
+                    "best_model",
+                    registered_model_name="DinoVisionTransformerCancerPredictor"
+                )
+            else:
+                patience_counter += 1
+
+            if patience_counter >= patience:
+                print("\nEarly stopping triggered!")
+                break
+
+        end_time = datetime.datetime.now()
+        training_duration = str(end_time - start_time)
+
+        print("\nTraining complete!")
+        print(f"Best validation loss: {best_val_loss:.4f}")
+        
+        # Log final model to MLflow
+        mlflow.pytorch.log_model(
+            model.module if isinstance(model, nn.DataParallel) else model,
+            "final_model",
+            registered_model_name="DinoVisionTransformerCancerPredictor"
+        )
+        
+        # Log model configuration
+        log_model_config(
+            model=model.module if isinstance(model, nn.DataParallel) else model,
+            dataset=full_dataset,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            num_epochs=num_epochs,
+            training_duration=training_duration,
+            final_loss=final_loss,
+            early_stopping_patience=patience,
+            batch_size=batch_size
+        )
+        
+        print("Model configuration saved to MLflow")
+        
+        print("Model Specifications:")
+        print(f"Epochs: {num_epochs}")
+        print(f"Loss Function: {criterion}")
+        print(f"Optimizer: {optimizer}")
+        print(f"Learning Rate Scheduler: {scheduler}")
+        print(f"Training Duration: {training_duration}")
+        print(f"Final Validation Loss: {final_loss:.4f}")
+        print(f"Best Validation Loss: {best_val_loss:.4f}")
+
 if __name__ == "__main__":
     main()
