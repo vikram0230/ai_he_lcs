@@ -11,6 +11,19 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import datetime
+from sklearn.manifold import TSNE
+
+def get_slurm_job_id():
+    """Get SLURM job ID from environment variable."""
+    return os.environ.get('SLURM_JOB_ID', 'local')
+
+def ensure_log_dir():
+    """Create logs directory with SLURM job ID if it doesn't exist."""
+    slurm_id = get_slurm_job_id()
+    log_dir = f'logs/predictions_{slurm_id}'
+    os.makedirs(log_dir, exist_ok=True)
+    return log_dir
 
 def load_model_from_mlflow(run_id, model_name="best_model"):
     """Load a model from MLflow."""
@@ -70,38 +83,27 @@ def calculate_metrics(y_true, y_pred, y_prob):
     # Convert predictions to binary
     y_pred_binary = (y_pred > 0.5).astype(int)
     
-    # Calculate metrics for each class (1st year and 5th year)
-    for i, year in enumerate(['1st_year', '5th_year']):
-        metrics[f'{year}_accuracy'] = accuracy_score(y_true[:, i], y_pred_binary[:, i])
-        metrics[f'{year}_precision'] = precision_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
-        metrics[f'{year}_recall'] = recall_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
-        metrics[f'{year}_f1'] = f1_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
-        metrics[f'{year}_auc'] = roc_auc_score(y_true[:, i], y_prob[:, i])
-        
-        # Calculate confusion matrix
-        cm = confusion_matrix(y_true[:, i], y_pred_binary[:, i])
-        metrics[f'{year}_confusion_matrix'] = cm
+    # Calculate metrics for year 1 prediction only
+    metrics['accuracy'] = accuracy_score(y_true, y_pred_binary)
+    metrics['precision'] = precision_score(y_true, y_pred_binary, zero_division=0)
+    metrics['recall'] = recall_score(y_true, y_pred_binary, zero_division=0)
+    metrics['f1'] = f1_score(y_true, y_pred_binary, zero_division=0)
+    metrics['auc'] = roc_auc_score(y_true, y_prob)
+    
+    # Calculate confusion matrix
+    cm = confusion_matrix(y_true, y_pred_binary)
+    metrics['confusion_matrix'] = cm
     
     return metrics
 
-def plot_confusion_matrices(metrics, save_path):
-    """Plot confusion matrices for both 1st and 5th year predictions."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
-    # Plot 1st year confusion matrix
-    sns.heatmap(metrics['1st_year_confusion_matrix'], 
-                annot=True, fmt='d', cmap='Blues', ax=ax1)
-    ax1.set_title('1st Year Prediction')
-    ax1.set_xlabel('Predicted')
-    ax1.set_ylabel('Actual')
-    
-    # Plot 5th year confusion matrix
-    sns.heatmap(metrics['5th_year_confusion_matrix'], 
-                annot=True, fmt='d', cmap='Blues', ax=ax2)
-    ax2.set_title('5th Year Prediction')
-    ax2.set_xlabel('Predicted')
-    ax2.set_ylabel('Actual')
-    
+def plot_confusion_matrix(metrics, save_path):
+    """Plot confusion matrix for year 1 prediction."""
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(metrics['confusion_matrix'], 
+                annot=True, fmt='d', cmap='Blues')
+    plt.title('Year 1 Cancer Prediction')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
@@ -111,115 +113,208 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    # Create log directory
+    log_dir = ensure_log_dir()
+    print(f"Storing outputs in: {log_dir}")
+    
     # Load model from MLflow
-    run_id = 'a43d76149b344f99901dccafbad2d0fb'
-    model = load_model_from_mlflow(run_id)
-    model = model.to(device)
-    model.eval()
+    run_id = '529db14fff1243cdb82aa609d8f3f673'
     
-    # Set up data transformations
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    # Load test dataset
-    test_dataset = PatientDicomDataset(
-        root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_test_data',
-        labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
-        transform=transform,
-        patients_count=50
-    )
-    
-    test_loader = DataLoader(
-        test_dataset, 
-        batch_size=4, 
-        collate_fn=collate_fn, 
-        shuffle=False
-    )
-    
-    # Initialize lists to store predictions and true labels
-    all_predictions = []
-    all_probabilities = []
-    all_true_labels = []
-    
-    # Perform inference
-    print("Performing inference on test data...")
-    with torch.no_grad():
-        for batch in tqdm(test_loader):
-            inputs = batch['images'].to(device)
-            positions = batch['positions'].to(device)
-            labels = batch['labels'].float().to(device)
-            attention_masks = batch['attention_mask'].to(device)
-            
-            # Get model predictions
-            outputs = model(inputs, positions, attention_masks)
-            probabilities = torch.sigmoid(outputs)
-            
-            # Store predictions and true labels
-            all_predictions.append(outputs.cpu().numpy())
-            all_probabilities.append(probabilities.cpu().numpy())
-            all_true_labels.append(labels.cpu().numpy())
-    
-    # Concatenate all predictions and labels
-    all_predictions = np.concatenate(all_predictions, axis=0)
-    all_probabilities = np.concatenate(all_probabilities, axis=0)
-    all_true_labels = np.concatenate(all_true_labels, axis=0)
-    
-    # Print sample predictions and labels
-    print("\nSample Predictions and Labels:")
-    print("-" * 50)
-    print("Format: [1st_year, 5th_year]")
-    print("\nFirst 5 samples:")
-    for i in range(min(5, len(all_predictions))):
-        print(f"\nSample {i+1}:")
-        print(f"Raw logits: {all_predictions[i]}")
-        print(f"Probabilities: {all_probabilities[i]}")
-        print(f"True labels: {all_true_labels[i]}")
-        print(f"Predicted class: {all_probabilities[i] > 0.5}")
-        print(f"Actual class: {all_true_labels[i]}")
-    
-    # Calculate metrics
-    metrics = calculate_metrics(all_true_labels, all_predictions, all_probabilities)
-    
-    # Print metrics
-    print("\nTest Results:")
-    print("-" * 50)
-    for year in ['1st_year', '5th_year']:
-        print(f"\n{year.upper()} PREDICTIONS:")
-        print(f"Accuracy: {metrics[f'{year}_accuracy']:.4f}")
-        print(f"Precision: {metrics[f'{year}_precision']:.4f}")
-        print(f"Recall: {metrics[f'{year}_recall']:.4f}")
-        print(f"F1 Score: {metrics[f'{year}_f1']:.4f}")
-        print(f"AUC-ROC: {metrics[f'{year}_auc']:.4f}")
-        print("\nConfusion Matrix:")
-        print(metrics[f'{year}_confusion_matrix'])
-    
-    # Plot confusion matrices
-    plot_confusion_matrices(metrics, 'confusion_matrices.png')
-    print("\nConfusion matrices saved to 'confusion_matrices.png'")
-    
-    # Save metrics to CSV
-    metrics_df = pd.DataFrame({
-        'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'AUC-ROC'],
-        '1st Year': [
-            metrics['1st_year_accuracy'],
-            metrics['1st_year_precision'],
-            metrics['1st_year_recall'],
-            metrics['1st_year_f1'],
-            metrics['1st_year_auc']
-        ],
-        '5th Year': [
-            metrics['5th_year_accuracy'],
-            metrics['5th_year_precision'],
-            metrics['5th_year_recall'],
-            metrics['5th_year_f1'],
-            metrics['5th_year_auc']
-        ]
-    })
-    metrics_df.to_csv('test_metrics.csv', index=False)
-    print("\nMetrics saved to 'test_metrics.csv'")
+    # Set the MLflow run context to the same run as the model
+    with mlflow.start_run(run_id=run_id):
+        model = load_model_from_mlflow(run_id)
+        model = model.to(device)
+        model.eval()
+        
+        # Set up data transformations
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Load test dataset
+        test_dataset = PatientDicomDataset(
+            root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_test_data',
+            labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
+            transform=transform,
+            patients_count=50
+        )
+        
+        test_loader = DataLoader(
+            test_dataset, 
+            batch_size=4, 
+            collate_fn=collate_fn, 
+            shuffle=False
+        )
+        
+        # Initialize lists to store predictions and true labels
+        all_predictions = []
+        all_probabilities = []
+        all_true_labels = []
+        # all_patient_ids = []
+        # all_years = []
+        all_embeddings = []
+        
+        # Perform inference
+        print("Performing inference on test data...")
+        with torch.no_grad():
+            for batch in tqdm(test_loader):
+                inputs = batch['images'].to(device)
+                positions = batch['positions'].to(device)
+                labels = batch['labels'].float().to(device)
+                attention_masks = batch['attention_mask'].to(device)
+                
+                # Get model predictions and embeddings
+                outputs = model(inputs, positions, attention_masks)
+                probabilities = torch.sigmoid(outputs)
+                
+                # Get embeddings before the predictor layer
+                B, R, S, C, H, W = inputs.shape
+                x_reshaped = inputs.view(B * R * S, C, H, W)
+                features = model.transformer(x_reshaped)
+                features = features.view(B, R, S, -1)
+                features = model.transformer.norm(features)
+                
+                # Process each reconstruction
+                recon_features = []
+                for r in range(R):
+                    slice_sequence = features[:, r]
+                    positions_encoded = model.position_encoding(positions.unsqueeze(-1))
+                    slice_sequence = slice_sequence + positions_encoded
+                    
+                    if attention_masks is not None:
+                        mask = attention_masks[:, r]
+                        key_padding_mask = ~mask.bool()
+                    else:
+                        key_padding_mask = None
+                    
+                    processed_sequence = model.slice_processor(
+                        slice_sequence,
+                        src_key_padding_mask=key_padding_mask
+                    )
+                    
+                    if attention_masks is not None:
+                        mask = mask.unsqueeze(1)
+                        processed_sequence = processed_sequence * mask.unsqueeze(-1)
+                    
+                    recon_feature = processed_sequence.mean(dim=1)
+                    recon_features.append(recon_feature)
+                
+                recon_features = torch.stack(recon_features, dim=1)
+                attention_weights = model.reconstruction_attention(recon_features)
+                if attention_masks is not None:
+                    recon_mask = (attention_masks.sum(dim=-1) > 0).float()
+                    attention_weights = attention_weights * recon_mask.unsqueeze(-1).unsqueeze(-1)
+                    attention_weights = attention_weights / (attention_weights.sum(dim=1, keepdim=True) + 1e-9)
+                
+                embeddings = torch.sum(attention_weights * recon_features, dim=(1,2))
+                
+                # Store predictions, probabilities, embeddings and true labels
+                all_predictions.append(outputs.cpu().numpy())
+                all_probabilities.append(probabilities.cpu().numpy())
+                all_true_labels.append(labels.cpu().numpy())
+                all_embeddings.append(embeddings.cpu().numpy())
+                
+                # Store patient IDs and years
+                # all_patient_ids.extend([test_dataset.patient_ids[i] for i in range(len(batch['labels']))])
+                # all_years.extend([test_dataset.years[i] for i in range(len(batch['labels']))])
+        
+        # Concatenate all predictions and labels
+        all_predictions = np.concatenate(all_predictions, axis=0)
+        all_probabilities = np.concatenate(all_probabilities, axis=0)
+        all_true_labels = np.concatenate(all_true_labels, axis=0)
+        all_embeddings = np.concatenate(all_embeddings, axis=0)
+        
+        # Save predictions, probabilities, embeddings and true labels to CSV
+        results_df = pd.DataFrame({
+            # 'patient_id': all_patient_ids,
+            # 'year': all_years,
+            'raw_predictions': all_predictions.flatten(),
+            'probabilities': all_probabilities.flatten(),
+            'true_labels': all_true_labels.flatten(),
+            'predicted_class': (all_probabilities > 0.5).flatten().astype(int)
+        })
+        
+        # Add embedding columns
+        # for i in range(all_embeddings.shape[1]):
+        #     results_df[f'embedding_{i}'] = all_embeddings[:, i]
+        
+        # Save to log directory
+        predictions_path = os.path.join(log_dir, 'model_predictions.csv')
+        results_df.to_csv(predictions_path, index=False)
+        print(f"\nPredictions and embeddings saved to '{predictions_path}'")
+        
+        # Log predictions CSV to MLflow
+        mlflow.log_artifact(predictions_path)
+        
+        # Calculate metrics
+        metrics = calculate_metrics(all_true_labels, all_predictions, all_probabilities)
+        
+        # Log metrics to MLflow
+        mlflow.log_metrics({
+            'test_accuracy': metrics['accuracy'],
+            'test_precision': metrics['precision'],
+            'test_recall': metrics['recall'],
+            'test_f1': metrics['f1'],
+            'test_auc': metrics['auc']
+        })
+        
+        # Plot and save confusion matrix
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(metrics['confusion_matrix'], 
+                    annot=True, fmt='d', cmap='Blues')
+        plt.title('Year 1 Cancer Prediction')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        
+        # Save confusion matrix plot to log directory
+        confusion_matrix_path = os.path.join(log_dir, 'confusion_matrix.png')
+        plt.savefig(confusion_matrix_path)
+        plt.close()
+        mlflow.log_artifact(confusion_matrix_path)
+        
+        # Create and save embedding visualization
+        tsne = TSNE(n_components=2, random_state=42)
+        embeddings_2d = tsne.fit_transform(all_embeddings)
+        
+        plt.figure(figsize=(10, 8))
+        scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], 
+                            c=all_true_labels, cmap='viridis', alpha=0.6)
+        plt.colorbar(scatter, label='True Label')
+        plt.title('t-SNE Visualization of Model Embeddings')
+        plt.xlabel('t-SNE 1')
+        plt.ylabel('t-SNE 2')
+        
+        # Save embedding visualization to log directory
+        embeddings_path = os.path.join(log_dir, 'embeddings_visualization.png')
+        plt.savefig(embeddings_path)
+        plt.close()
+        mlflow.log_artifact(embeddings_path)
+        print(f"\nEmbedding visualization saved to '{embeddings_path}'")
+        
+        # Save metrics to CSV
+        metrics_df = pd.DataFrame({
+            'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'AUC-ROC'],
+            'Value': [
+                metrics['accuracy'],
+                metrics['precision'],
+                metrics['recall'],
+                metrics['f1'],
+                metrics['auc']
+            ]
+        })
+        
+        # Save metrics to log directory
+        metrics_path = os.path.join(log_dir, 'test_metrics.csv')
+        metrics_df.to_csv(metrics_path, index=False)
+        print(f"\nMetrics saved to '{metrics_path}'")
+        
+        # Log metrics CSV to MLflow
+        mlflow.log_artifact(metrics_path)
+        
+        print("\nAll outputs have been saved to:", log_dir)
+        print("\nAll metrics have been logged to MLflow in the same run")
 
 if __name__ == "__main__":
     main() 
