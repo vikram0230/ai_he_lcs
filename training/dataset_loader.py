@@ -35,8 +35,8 @@ class PatientDicomDataset(Dataset):
         for patient_id in patient_folders:
             patient_records = self.labels_df[self.labels_df['pid'] == int(patient_id)]
             if not patient_records.empty:
-                # Check if any record has days_to_diagnosis > 0
-                if (patient_records['days_to_diagnosis'] > 0).any():
+                # Check if any record has days_to_diagnosis between 0 and 365 (1 year)
+                if ((patient_records['days_to_diagnosis'] > 0) & (patient_records['days_to_diagnosis'] <= 365)).any():
                     positive_patients.append(patient_id)
                 else:
                     negative_patients.append(patient_id)
@@ -177,13 +177,13 @@ class PatientDicomDataset(Dataset):
         num_slices = len(dicom_files)
         slice_positions = torch.linspace(0, 1, num_slices, dtype=torch.float32)
         
-        # Get labels for this patient and study year
-        patient_labels = self.labels_df[
+        # Get label for this patient and study year
+        patient_label = self.labels_df[
             (self.labels_df['pid'] == int(patient_id)) & 
             (self.labels_df['study_yr'] == int(study_yr))
-        ].iloc[0, [6,10]].values
+        ].iloc[0, 6]  # Get year 1 label (index 6)
         
-        patient_labels = torch.tensor(patient_labels, dtype=torch.float32)
-        print(f"Got labels for Patient ID: {patient_id}, Study Year: {study_yr} => Patient Labels: {patient_labels}")
+        patient_label = torch.tensor(patient_label, dtype=torch.float32).unsqueeze(-1)  # Add extra dimension
+        print(f"Got labels for Patient ID: {patient_id}, Study Year: {study_yr} => Patient Label: {patient_label}")
         
-        return patient_tensor, slice_positions, patient_labels
+        return patient_tensor, slice_positions, patient_label

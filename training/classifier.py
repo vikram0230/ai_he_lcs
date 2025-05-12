@@ -81,7 +81,7 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(128, 2),
+            nn.Linear(128, 1),
         )
         
         self.reconstruction_attention = ReconstructionAttention()
@@ -161,14 +161,14 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
 
     def predict_probabilities(self, x):
         """
-        Returns probability scores for cancer prediction for 1st and 5th year.
+        Returns probability score for cancer prediction for 1st year.
         
         Args:
             x: Input tensor of shape (batch_size, num_reconstructions, num_slices, channels, height, width)
             
         Returns:
-            Tensor of shape (batch_size, 2) containing probability scores between 0 and 1
-            for 1st and 5th year cancer prediction
+            Tensor of shape (batch_size, 1) containing probability score between 0 and 1
+            for 1st year cancer prediction
         """
         self.eval()
         with torch.no_grad():
