@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
+import random
 
 
 # Create data loader with collate function to handle variable number of slices
@@ -214,7 +215,7 @@ def load_model_from_mlflow(run_id, model_name="best_model"):
     
     return model
 
-def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, device):
+def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, device, start_epoch=0):
     """Retrain a loaded model with new parameters."""
     # Move model to device
     model = model.to(device)
@@ -224,7 +225,7 @@ def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, d
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5, min_lr=1e-6)
     
     # Setup loss function
-    pos_weight = torch.tensor([112.83, 34.30])
+    pos_weight = torch.tensor([112.83])  # Only year 1 weight
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
     
     # Setup dataloader
@@ -242,14 +243,18 @@ def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, d
             'retrain_epochs': num_epochs,
             'retrain_learning_rate': learning_rate,
             'retrain_patience': patience,
-            'original_run_id': run_id
+            'original_run_id': run_id,
+            'start_epoch': start_epoch
         })
         
         start_time = datetime.datetime.now()
         
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, start_epoch + num_epochs):
             model.train()
             total_loss = 0
+            
+            print(f"\nStarting Epoch {epoch+1}/{start_epoch + num_epochs}")
+            print("Training phase:")
             
             for batch_idx, batch in enumerate(dataloader):
                 try:
@@ -289,10 +294,11 @@ def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, d
             # Log epoch metrics
             mlflow.log_metrics({
                 'retrain_epoch_loss': avg_loss,
-                'retrain_learning_rate': optimizer.param_groups[0]['lr']
+                'retrain_learning_rate': optimizer.param_groups[0]['lr'],
+                'epoch': epoch + 1
             }, step=epoch)
             
-            print(f"\nRetraining Epoch {epoch+1}/{num_epochs} Summary:")
+            print(f"\nRetraining Epoch {epoch+1}/{start_epoch + num_epochs} Summary:")
             print(f"Average Loss: {avg_loss:.4f}")
             
             scheduler.step(avg_loss)
@@ -326,10 +332,11 @@ def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, d
         # Log final metrics
         mlflow.log_metrics({
             'retrain_final_loss': avg_loss,
-            'retrain_duration': training_duration
+            'retrain_duration': training_duration,
+            'final_epoch': epoch + 1
         })
         
-        return model, avg_loss, training_duration
+        return model, avg_loss, training_duration, epoch + 1
 
 def calculate_metrics(y_true, y_pred, y_prob):
     """Calculate various classification metrics."""
@@ -338,17 +345,16 @@ def calculate_metrics(y_true, y_pred, y_prob):
     # Convert predictions to binary
     y_pred_binary = (y_pred > 0.5).astype(int)
     
-    # Calculate metrics for each class (1st year and 5th year)
-    for i, year in enumerate(['1st_year', '5th_year']):
-        metrics[f'{year}_accuracy'] = accuracy_score(y_true[:, i], y_pred_binary[:, i])
-        metrics[f'{year}_precision'] = precision_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
-        metrics[f'{year}_recall'] = recall_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
-        metrics[f'{year}_f1'] = f1_score(y_true[:, i], y_pred_binary[:, i], zero_division=0)
-        metrics[f'{year}_auc'] = roc_auc_score(y_true[:, i], y_prob[:, i])
-        
-        # Calculate confusion matrix
-        cm = confusion_matrix(y_true[:, i], y_pred_binary[:, i])
-        metrics[f'{year}_confusion_matrix'] = cm
+    # Calculate metrics for year 1 prediction
+    metrics['accuracy'] = accuracy_score(y_true, y_pred_binary)
+    metrics['precision'] = precision_score(y_true, y_pred_binary, zero_division=0)
+    metrics['recall'] = recall_score(y_true, y_pred_binary, zero_division=0)
+    metrics['f1'] = f1_score(y_true, y_pred_binary, zero_division=0)
+    metrics['auc'] = roc_auc_score(y_true, y_prob)
+    
+    # Calculate confusion matrix
+    cm = confusion_matrix(y_true, y_pred_binary)
+    metrics['confusion_matrix'] = cm
     
     return metrics
 
@@ -396,36 +402,24 @@ def run_inference_and_log_metrics(model, test_dataset, device, mlflow_run):
     metrics = calculate_metrics(all_true_labels, all_predictions, all_probabilities)
     
     # Log metrics to MLflow
-    for year in ['1st_year', '5th_year']:
-        mlflow.log_metrics({
-            f'test_{year}_accuracy': metrics[f'{year}_accuracy'],
-            f'test_{year}_precision': metrics[f'{year}_precision'],
-            f'test_{year}_recall': metrics[f'{year}_recall'],
-            f'test_{year}_f1': metrics[f'{year}_f1'],
-            f'test_{year}_auc': metrics[f'{year}_auc']
-        })
+    mlflow.log_metrics({
+        'test_accuracy': metrics['accuracy'],
+        'test_precision': metrics['precision'],
+        'test_recall': metrics['recall'],
+        'test_f1': metrics['f1'],
+        'test_auc': metrics['auc']
+    })
     
-    # Plot and log confusion matrices
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    # Plot and log confusion matrix
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(metrics['confusion_matrix'], 
+                annot=True, fmt='d', cmap='Blues')
+    plt.title('Year 1 Cancer Prediction')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
     
-    # Plot 1st year confusion matrix
-    sns.heatmap(metrics['1st_year_confusion_matrix'], 
-                annot=True, fmt='d', cmap='Blues', ax=ax1)
-    ax1.set_title('1st Year Prediction')
-    ax1.set_xlabel('Predicted')
-    ax1.set_ylabel('Actual')
-    
-    # Plot 5th year confusion matrix
-    sns.heatmap(metrics['5th_year_confusion_matrix'], 
-                annot=True, fmt='d', cmap='Blues', ax=ax2)
-    ax2.set_title('5th Year Prediction')
-    ax2.set_xlabel('Predicted')
-    ax2.set_ylabel('Actual')
-    
-    plt.tight_layout()
-    
-    # Save confusion matrices plot to MLflow
-    confusion_matrix_path = 'confusion_matrices.png'
+    # Save confusion matrix plot to MLflow
+    confusion_matrix_path = 'confusion_matrix.png'
     plt.savefig(confusion_matrix_path)
     plt.close()
     mlflow.log_artifact(confusion_matrix_path)
@@ -433,21 +427,30 @@ def run_inference_and_log_metrics(model, test_dataset, device, mlflow_run):
     # Print metrics
     print("\nTest Results:")
     print("-" * 50)
-    for year in ['1st_year', '5th_year']:
-        print(f"\n{year.upper()} PREDICTIONS:")
-        print(f"Accuracy: {metrics[f'{year}_accuracy']:.4f}")
-        print(f"Precision: {metrics[f'{year}_precision']:.4f}")
-        print(f"Recall: {metrics[f'{year}_recall']:.4f}")
-        print(f"F1 Score: {metrics[f'{year}_f1']:.4f}")
-        print(f"AUC-ROC: {metrics[f'{year}_auc']:.4f}")
-        print("\nConfusion Matrix:")
-        print(metrics[f'{year}_confusion_matrix'])
+    print(f"Accuracy: {metrics['accuracy']:.4f}")
+    print(f"Precision: {metrics['precision']:.4f}")
+    print(f"Recall: {metrics['recall']:.4f}")
+    print(f"F1 Score: {metrics['f1']:.4f}")
+    print(f"AUC-ROC: {metrics['auc']:.4f}")
+    print("\nConfusion Matrix:")
+    print(metrics['confusion_matrix'])
     
     return metrics
 
 def main():
     # Setup MLflow
     experiment_id = setup_mlflow()
+    
+    # Set random seed for reproducibility
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     # Start MLflow run for new training
     with mlflow.start_run(run_name=f"frozen_dinov2_run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}") as mlflow_run:
@@ -477,7 +480,11 @@ def main():
         # Split dataset into train and validation
         train_size = int(0.8 * len(full_dataset))
         val_size = len(full_dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            full_dataset, 
+            [train_size, val_size],
+            generator=torch.Generator().manual_seed(seed)
+        )
         
         batch_size = 10
         
@@ -509,8 +516,8 @@ def main():
 
         # Training loop
         num_epochs = 100
-        pos_weight = torch.tensor([112.83, 34.30])
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device), reduction='mean')
+        pos_weight = torch.tensor([112.83])  # Only year 1 weight
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
         
         # Use automatic mixed precision
         scaler = torch.amp.GradScaler()
@@ -545,6 +552,32 @@ def main():
 
         start_time = datetime.datetime.now()
         final_loss = None
+
+        # Log training parameters
+        mlflow.log_params({
+            'batch_size': batch_size,
+            'learning_rate': learning_rate,
+            'num_epochs': num_epochs,
+            'early_stopping_patience': patience,
+            'train_size': 0.8,
+            'seed': seed
+        })
+
+        # Log model configuration before training starts
+        print("\nLogging model configuration...")
+        log_model_config(
+            model=model.module if isinstance(model, nn.DataParallel) else model,
+            dataset=full_dataset,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            num_epochs=num_epochs,
+            training_duration="0:00:00",  # Will be updated after training
+            final_loss=None,  # Will be updated after training
+            early_stopping_patience=patience,
+            batch_size=batch_size
+        )
+        print("Model configuration logged successfully")
 
         for epoch in range(num_epochs):
             # Training phase
@@ -689,7 +722,7 @@ def main():
             registered_model_name="DinoVisionTransformerCancerPredictor"
         )
         
-        # Log model configuration
+        # Update model configuration with final metrics
         log_model_config(
             model=model.module if isinstance(model, nn.DataParallel) else model,
             dataset=full_dataset,
@@ -703,7 +736,7 @@ def main():
             batch_size=batch_size
         )
         
-        print("Model configuration saved to MLflow")
+        print("Model configuration updated with final metrics")
         
         print("Model Specifications:")
         print(f"Epochs: {num_epochs}")
@@ -726,10 +759,8 @@ def main():
         print("\nTraining and evaluation complete!")
         print(f"Best validation loss: {best_val_loss:.4f}")
         print("\nTest Metrics Summary:")
-        for year in ['1st_year', '5th_year']:
-            print(f"\n{year.upper()}:")
-            print(f"Accuracy: {test_metrics[f'{year}_accuracy']:.4f}")
-            print(f"AUC-ROC: {test_metrics[f'{year}_auc']:.4f}")
+        print(f"Accuracy: {test_metrics['accuracy']:.4f}")
+        print(f"AUC-ROC: {test_metrics['auc']:.4f}")
 
 if __name__ == "__main__":
     main()
