@@ -7,17 +7,20 @@ This script facilitates the transfer of NLST (National Lung Screening Trial) dat
 It supports transferring both training and test datasets with configurable set sizes and diagnosis status.
 
 Usage:
-    python nlst_transfer.py <data_type> <set_size> [diagnosis]
+    python nlst_transfer.py -type <data_type> (-size <set_size> | -range <start>-<end>) [-diagnosis <diagnosis>] [-output <output_dir>]
     
     Arguments:
-        data_type: Specify 'train' or 'test' to select the dataset type
-        set_size: Number of PIDs to transfer from the selected dataset
-        diagnosis: Optional. Specify 'positive' or 'negative' to filter by diagnosis status
+        -type, --type: Specify 'train' or 'test' to select the dataset type
+        -size, --size: Number of PIDs to transfer from the selected dataset (e.g., 100)
+        -range, --range: Range of PIDs to transfer (e.g., 100-200)
+        -diagnosis, --diagnosis: Optional. Specify 'positive' or 'negative' to filter by diagnosis status
+        -output, --output: Optional. Custom output directory path (default: nlst_train_data or nlst_test_data)
 
 Example:
-    python nlst_transfer.py train 100  # Transfer first 100 PIDs from training set
-    python nlst_transfer.py test 50 positive  # Transfer first 50 positive PIDs from test set
-    python nlst_transfer.py train 75 negative  # Transfer first 75 negative PIDs from training set
+    python nlst_transfer.py -type train -size 100  # Transfer first 100 PIDs from training set
+    python nlst_transfer.py -type test -range 100-200  # Transfer PIDs from index 100 to 200
+    python nlst_transfer.py -type train -size 50 -diagnosis positive  # Transfer first 50 positive PIDs
+    python nlst_transfer.py -type test -range 50-150 -diagnosis negative -output custom_dir  # Transfer to custom directory
 """
 
 import os
@@ -181,26 +184,52 @@ def transfer_data(pids: list[int], dest_dir: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transfer data for a specified set size and type.")
-    parser.add_argument("data_type", type=str, help="Specify the data type as 'train' or 'test'.")
-    parser.add_argument("set_size", type=int, help="Specify the size of the set.")
-    parser.add_argument("diagnosis", type=str, nargs='?', choices=['positive', 'negative'],
+    parser.add_argument("-type", "--type", type=str, required=True, choices=['train', 'test'],
+                      help="Specify the data type as 'train' or 'test'.")
+    
+    # Create a mutually exclusive group for size and range
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("-size", "--size", type=int,
+                      help="Number of PIDs to transfer from the start of the dataset")
+    group.add_argument("-range", "--range", type=str,
+                      help="Range of PIDs to transfer (e.g., '100-200')")
+    
+    parser.add_argument("-diagnosis", "--diagnosis", type=str, choices=['positive', 'negative'],
                       help="Optional: Specify 'positive' or 'negative' to filter by diagnosis status")
+    parser.add_argument("-output", "--output", type=str,
+                      help="Optional: Custom output directory path (default: nlst_train_data or nlst_test_data)")
     args = parser.parse_args()
 
-    data_type = args.data_type.lower()
-    set_size = args.set_size
+    # Log the command being used
+    command = f"python {os.path.basename(__file__)}"
+    command += f" -type {args.type}"
+    if args.size is not None:
+        command += f" -size {args.size}"
+    else:
+        command += f" -range {args.range}"
+    if args.diagnosis:
+        command += f" -diagnosis {args.diagnosis}"
+    if args.output:
+        command += f" -output {args.output}"
+    logger.info(f"Executing command: {command}")
+
+    data_type = args.type.lower()
     diagnosis = args.diagnosis
 
     # Get base PIDs based on data type
     if data_type == 'train':
         pids = get_train_pids()
-        dest_dir = 'nlst_train_data'
+        default_dest_dir = 'nlst_train_data'
     elif data_type == 'test':
         pids = get_test_pids()
-        dest_dir = 'nlst_test_data'
+        default_dest_dir = 'nlst_test_data'
     else:
         logger.error("Invalid data type. Please specify 'train' or 'test'.")
         sys.exit(1)
+
+    # Use custom output directory if provided, otherwise use default
+    dest_dir = args.output if args.output else default_dest_dir
+    logger.info(f"Using output directory: {dest_dir}")
 
     # Filter by diagnosis if specified
     if diagnosis:
@@ -208,4 +237,20 @@ if __name__ == "__main__":
         pids = [pid for pid in pids if pid in diagnosis_pids]
         logger.info(f"Filtered to {len(pids)} PIDs with {diagnosis} diagnosis")
 
-    transfer_data(pids[:set_size], dest_dir)
+    # Handle size or range selection
+    if args.size is not None:
+        selected_pids = pids[:args.size]
+        logger.info(f"Selected first {args.size} PIDs")
+    else:
+        try:
+            start, end = map(int, args.range.split('-'))
+            if start < 0 or end >= len(pids) or start > end:
+                logger.error(f"Invalid range: {args.range}. Must be within 0-{len(pids)-1} and start <= end")
+                sys.exit(1)
+            selected_pids = pids[start:end+1]
+            logger.info(f"Selected PIDs from index {start} to {end}")
+        except ValueError:
+            logger.error(f"Invalid range format: {args.range}. Must be in format 'start-end'")
+            sys.exit(1)
+
+    transfer_data(selected_pids, dest_dir)
