@@ -98,7 +98,7 @@ class PatientDicomDataset(Dataset):
                     for recon_folder in recon_folders:
                         recon_path = os.path.join(scan_path, recon_folder)
                         dicom_files = [f for f in os.listdir(recon_path) if f.endswith('.dcm')]
-                        if len(dicom_files) >= 50:
+                        if 50 <= len(dicom_files) <= 200:  # Modified condition to check upper limit
                             dicom_counts.append(len(dicom_files))
                             valid_recons.append(recon_folder)
                     
@@ -110,7 +110,7 @@ class PatientDicomDataset(Dataset):
                         }
                         print(f"Patient {patient_id}, date {date_folder}: {len(valid_recons)} reconstructions with {dicom_counts[0]} slices each")
                     else:
-                        print(f"Skipping scan - Patient {patient_id}, date {date_folder}: Unequal DICOM counts {dicom_counts}")
+                        print(f"Skipping scan - Patient {patient_id}, date {date_folder}: Unequal DICOM counts {dicom_counts} or slice count outside range [50, 200]")
                 else:
                     print(f"Warning: Could not determine study year for patient {patient_id}, date {date_folder}")
         
@@ -142,9 +142,9 @@ class PatientDicomDataset(Dataset):
             dicom_files = sorted([f for f in os.listdir(recon_path) if f.endswith('.dcm')],
                                key=lambda x: int(x.split('-')[1].split('.')[0]))  # For files like '1-001.dcm'
             
-            # Skip reconstructions with fewer than 50 slices
-            if len(dicom_files) < 50:
-                print(f"Skipping reconstruction {recon_folder} with only {len(dicom_files)} slices")
+            # Skip reconstructions with fewer than 50 or more than 200 slices
+            if len(dicom_files) < 50 or len(dicom_files) > 200:
+                print(f"Skipping reconstruction {recon_folder} with {len(dicom_files)} slices (outside range [50, 200])")
                 continue
             
             reconstruction_images = []
