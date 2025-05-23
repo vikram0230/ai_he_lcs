@@ -7,13 +7,14 @@ This script facilitates the transfer of NLST (National Lung Screening Trial) dat
 It supports transferring both training and test datasets with configurable set sizes and diagnosis status.
 
 Usage:
-    python nlst_transfer.py -type <data_type> (-size <set_size> | -range <start>-<end>) [-diagnosis <diagnosis>] [-output <output_dir>]
+    python nlst_transfer.py -type <data_type> (-size <set_size> | -range <start>-<end>) [-diagnosis <diagnosis>] [-year <year>] [-output <output_dir>]
     
     Arguments:
         -type, --type: Specify 'train' or 'test' to select the dataset type
         -size, --size: Number of PIDs to transfer from the selected dataset (e.g., 100)
         -range, --range: Range of PIDs to transfer (e.g., 100-200)
         -diagnosis, --diagnosis: Optional. Specify 'positive' or 'negative' to filter by diagnosis status
+        -year, --year: Optional. Filter by cancer diagnosis year (1-6)
         -output, --output: Optional. Custom output directory path (default: nlst_train_data or nlst_test_data)
 
 Example:
@@ -88,6 +89,25 @@ def get_diagnosis_pids(diagnosis: str) -> list[int]:
     else:  # negative
         pids = actual_df[actual_df['days_to_diagnosis'] < 0]['pid'].unique().tolist()
     logger.info(f"Found {len(pids)} PIDs with {diagnosis} diagnosis")
+    return pids
+
+def get_year_pids(year: int) -> list[int]:
+    """
+    Get the list of PIDs based on cancer diagnosis in a specific year.
+    
+    Args:
+        year: Year number (1-6) to filter PIDs
+        
+    Returns:
+        list: List of PIDs with cancer diagnosis in the specified year
+    """
+    if not 1 <= year <= 6:
+        raise ValueError("Year must be between 1 and 6")
+    
+    actual_df = pd.read_csv('nlst_actual.csv')
+    year_col = f'canc_yr{year}'
+    pids = actual_df[actual_df[year_col] == 1]['pid'].unique().tolist()
+    logger.info(f"Found {len(pids)} PIDs with cancer diagnosis in year {year}")
     return pids
 
 def transfer_data(pids: list[int], dest_dir: str):
@@ -196,6 +216,8 @@ if __name__ == "__main__":
     
     parser.add_argument("-diagnosis", "--diagnosis", type=str, choices=['positive', 'negative'],
                       help="Optional: Specify 'positive' or 'negative' to filter by diagnosis status")
+    parser.add_argument("-year", "--year", type=int, choices=range(1, 7),
+                      help="Optional: Filter by cancer diagnosis year (1-6)")
     parser.add_argument("-output", "--output", type=str,
                       help="Optional: Custom output directory path (default: nlst_train_data or nlst_test_data)")
     args = parser.parse_args()
@@ -209,12 +231,15 @@ if __name__ == "__main__":
         command += f" -range {args.range}"
     if args.diagnosis:
         command += f" -diagnosis {args.diagnosis}"
+    if args.year:
+        command += f" -year {args.year}"
     if args.output:
         command += f" -output {args.output}"
     logger.info(f"Executing command: {command}")
 
     data_type = args.type.lower()
     diagnosis = args.diagnosis
+    year = args.year
 
     # Get base PIDs based on data type
     if data_type == 'train':
@@ -236,6 +261,12 @@ if __name__ == "__main__":
         diagnosis_pids = set(get_diagnosis_pids(diagnosis))
         pids = [pid for pid in pids if pid in diagnosis_pids]
         logger.info(f"Filtered to {len(pids)} PIDs with {diagnosis} diagnosis")
+
+    # Filter by year if specified
+    if year:
+        year_pids = set(get_year_pids(year))
+        pids = [pid for pid in pids if pid in year_pids]
+        logger.info(f"Filtered to {len(pids)} PIDs with cancer diagnosis in year {year}")
 
     # Handle size or range selection
     if args.size is not None:
