@@ -14,67 +14,75 @@ from tqdm import tqdm
 import datetime
 from sklearn.manifold import TSNE
 
-def get_slurm_job_id():
-    """Get SLURM job ID from environment variable."""
-    return os.environ.get('SLURM_JOB_ID', 'local')
+from training.config import collate_fn, ensure_log_dir, load_model_from_mlflow
 
-def ensure_log_dir():
-    """Create logs directory with SLURM job ID if it doesn't exist."""
-    slurm_id = get_slurm_job_id()
-    log_dir = f'logs/predictions_{slurm_id}'
-    os.makedirs(log_dir, exist_ok=True)
-    return log_dir
+# def get_slurm_job_id():
+#     """Get SLURM job ID from environment variable."""
+#     return os.environ.get('SLURM_JOB_ID', 'local')
 
-def load_model_from_mlflow(run_id, model_name="best_model"):
-    """Load a model from MLflow."""
-    model_uri = f"runs:/{run_id}/{model_name}"
-    model = mlflow.pytorch.load_model(model_uri)
-    return model
+# def ensure_log_dir():
+#     """Create logs directory with SLURM job ID if it doesn't exist."""
+#     slurm_id = get_slurm_job_id()
+#     log_dir = f'logs/predictions_{slurm_id}'
+#     os.makedirs(log_dir, exist_ok=True)
+#     return log_dir
 
-def collate_fn(batch):
-    max_reconstructions = max(x[0].size(0) for x in batch)
-    max_slices = max(x[0].size(1) for x in batch)
+# def load_model_from_mlflow(run_id, model_name="best_model"):
+#     """Load a model from MLflow."""
+#     model_uri = f"runs:/{run_id}/{model_name}"
+#     model = mlflow.pytorch.load_model(model_uri)
+#     return model
+
+# def collate_fn(batch):
+#     max_reconstructions = max(x[0].size(0) for x in batch)
+#     max_slices = max(x[0].size(1) for x in batch)
     
-    images = []
-    positions = []
-    labels = []
-    attention_masks = []
+#     images = []
+#     positions = []
+#     labels = []
+#     attention_masks = []
     
-    for img, pos, label in batch:
-        # Create 2D attention mask
-        recon_mask = torch.zeros((max_reconstructions, max_slices))
+#     for img, pos, label in batch:
+#         # Create 2D attention mask
+#         recon_mask = torch.zeros((max_reconstructions, max_slices))
         
-        # Set 1s for actual data positions
-        recon_mask[:img.size(0), :img.size(1)] = 1
+#         # Set 1s for actual data positions
+#         recon_mask[:img.size(0), :img.size(1)] = 1
         
-        # Pad image and positions
-        if img.size(0) < max_reconstructions or img.size(1) < max_slices:
-            # Pad image
-            padded_img = torch.zeros((
-                max_reconstructions,
-                max_slices,
-                *img.shape[2:]  # channels, height, width
-            ))
-            # Copy actual data
-            padded_img[:img.size(0), :img.size(1)] = img
-            img = padded_img
+#         # Pad image and positions
+#         if img.size(0) < max_reconstructions or img.size(1) < max_slices:
+#             # Pad image
+#             padded_img = torch.zeros((
+#                 max_reconstructions,
+#                 max_slices,
+#                 *img.shape[2:]  # channels, height, width
+#             ))
+#             # Copy actual data
+#             padded_img[:img.size(0), :img.size(1)] = img
+#             img = padded_img
             
-            # Pad positions
-            padded_pos = torch.zeros(max_slices)
-            padded_pos[:pos.size(0)] = pos
-            pos = padded_pos
+#             # Pad positions
+#             padded_pos = torch.zeros(max_slices)
+#             padded_pos[:pos.size(0)] = pos
+#             pos = padded_pos
         
-        images.append(img)
-        positions.append(pos)
-        labels.append(label)
-        attention_masks.append(recon_mask)
+#         # Verify shapes
+#         assert img.size(1) == pos.size(0), \
+#             f"Position shape {pos.shape} doesn't match image slices {img.size(1)}"
+#         assert recon_mask.size() == (max_reconstructions, max_slices), \
+#             f"Mask shape {recon_mask.size()} doesn't match expected {(max_reconstructions, max_slices)}"
+        
+#         images.append(img)
+#         positions.append(pos)
+#         labels.append(label)
+#         attention_masks.append(recon_mask)
     
-    return {
-        'images': torch.stack(images),
-        'positions': torch.stack(positions),
-        'labels': torch.stack(labels),
-        'attention_mask': torch.stack(attention_masks)
-    }
+#     return {
+#         'images': torch.stack(images),
+#         'positions': torch.stack(positions),
+#         'labels': torch.stack(labels),
+#         'attention_mask': torch.stack(attention_masks)
+#     }
 
 def calculate_metrics(y_true, y_pred, y_prob):
     """Calculate various classification metrics."""
@@ -118,7 +126,7 @@ def main():
     print(f"Storing outputs in: {log_dir}")
     
     # Load model from MLflow
-    run_id = '529db14fff1243cdb82aa609d8f3f673'
+    run_id = '6c307bbdae1e41128b1ff7e7ba8eaf2d'
     
     # Set the MLflow run context to the same run as the model
     with mlflow.start_run(run_id=run_id):
@@ -138,12 +146,12 @@ def main():
             root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_test_data',
             labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
             transform=transform,
-            patients_count=50
+            patient_scan_count=50
         )
         
         test_loader = DataLoader(
             test_dataset, 
-            batch_size=4, 
+            batch_size=1, 
             collate_fn=collate_fn, 
             shuffle=False
         )
@@ -275,9 +283,13 @@ def main():
         mlflow.log_artifact(confusion_matrix_path)
         
         # Create and save embedding visualization
-        tsne = TSNE(n_components=2, random_state=42)
+        n_samples = len(all_embeddings)
+        perplexity = min(30, n_samples - 1)  # Use min of 30 or n_samples-1
+        print(f"Number of samples: {n_samples}, Using perplexity: {perplexity}")
+
+        tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
         embeddings_2d = tsne.fit_transform(all_embeddings)
-        
+
         plt.figure(figsize=(10, 8))
         scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], 
                             c=all_true_labels, cmap='viridis', alpha=0.6)

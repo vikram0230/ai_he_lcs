@@ -2,7 +2,7 @@
 #SBATCH --job-name=dinov2_train    # Job name
 #SBATCH --output=logs/slurm_logs/dinov2_train_%j.out     # Name of output file (%j expands to jobId)
 #SBATCH --error=logs/slurm_logs/dinov2_train_%j.out      # Name of error file (%j expands to jobId)
-#SBATCH --time=48:00:00            # Run time (hh:mm:ss) - 48 hours
+#SBATCH --time=72:00:00            # Run time (hh:mm:ss) - 72 hours
 #SBATCH --nodes=1                  # Number of nodes
 #SBATCH --ntasks=1                 # Number of tasks
 #SBATCH --cpus-per-task=4          # Number of CPU cores per task
