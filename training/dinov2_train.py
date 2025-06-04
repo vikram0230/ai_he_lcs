@@ -1,5 +1,4 @@
 import torch
-import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from torch import nn, optim
 from classifier import DinoVisionTransformerCancerPredictor
@@ -9,58 +8,115 @@ import mlflow
 import mlflow.pytorch
 import numpy as np
 import random
+import pandas as pd
+import yaml
+import os
+import shutil
 
-from training.config import check_loss_saturation, collate_fn, ensure_log_dir, log_model_config, run_inference_and_log_metrics, setup_mlflow
+from training.helper_functions import check_loss_saturation, collate_fn, create_transforms, ensure_log_dir, log_dataset_info, log_model_config, run_inference_and_log_metrics, setup_mlflow
 
+
+def load_config(config_path):
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+    
 
 def main():
+    # Set CUDA_VISIBLE_DEVICES to use the MIG instance
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0.3'  # Use MIG instance 3
+    
+    # Load configuration
+    config_path = 'training/config.yaml'
+    config = load_config(config_path)
+    
     # Setup MLflow
-    experiment_id = setup_mlflow()
-    print(f"Experiment ID: {experiment_id}", flush=True)
+    experiment_id = setup_mlflow(config['mlflow']['experiment_name'])
+    print(f"\nExperiment ID: {experiment_id}", flush=True)
     
     # Set random seed for reproducibility
-    seed = 42
+    seed = config['seed']
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+    
+    # Initialize CUDA device
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required but not available. Please run on a machine with GPU support.")
+    
+    # Get number of CUDA devices
+    num_devices = torch.cuda.device_count()
+    print(f"Number of CUDA devices detected: {num_devices}", flush=True)
+    
+    if num_devices == 0:
+        # Try to force CUDA initialization
+        torch.cuda.init()
+        num_devices = torch.cuda.device_count()
+        print(f"Number of CUDA devices after forced initialization: {num_devices}", flush=True)
+        
+        if num_devices == 0:
+            # Try to reset CUDA device
+            torch.cuda.empty_cache()
+            torch.cuda.reset_device()
+            num_devices = torch.cuda.device_count()
+            print(f"Number of CUDA devices after reset: {num_devices}", flush=True)
+            
+            if num_devices == 0:
+                raise RuntimeError("No CUDA devices found. Please ensure GPU is properly configured.")
+    
+    # Use the first available device
+    device = torch.device("cuda:0")
+    torch.cuda.set_device(device)
+    
+    # Print detailed device information
+    print(f"Using GPU: {torch.cuda.get_device_name(device)}", flush=True)
+    print(f"CUDA Version: {torch.version.cuda}", flush=True)
+    print(f"PyTorch CUDA available: {torch.cuda.is_available()}", flush=True)
+    print(f"Current CUDA device: {torch.cuda.current_device()}", flush=True)
+    print(f"Device capability: {torch.cuda.get_device_capability(device)}", flush=True)
+    print(f"Device memory allocated: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MB", flush=True)
+    print(f"Device memory cached: {torch.cuda.memory_reserved(device) / 1024**2:.2f} MB", flush=True)
+    
+    # Test CUDA functionality
+    test_tensor = torch.zeros(1).to(device)
+    print(f"Test tensor device: {test_tensor.device}", flush=True)
+    
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     
     # Start MLflow run for new training
     with mlflow.start_run(run_name=f"frozen_dinov2_run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}") as mlflow_run:
-        print(f"MLflow run started with ID: {mlflow_run.info.run_id}", flush=True)
+        print(f"\nMLflow run started with ID: {mlflow_run.info.run_id}", flush=True)
         
+        # Log config file as artifact
+        print("\nLogging config file as artifact...", flush=True)
+        mlflow.log_artifact(config_path, "config")
+        print("Config file logged successfully", flush=True)
+    
         # Set up data transformations
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        train_transform = create_transforms(config['transforms']['train'])
+        test_transform = create_transforms(config['transforms']['test'])
 
         # Load datasets
+        print("\nLoading train and val datasets...", flush=True)
         full_dataset = PatientDicomDataset(
-            root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_train_data',
-            labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
-            transform=transform,
-            patient_scan_count=200
+            config=config,
+            is_train=True,
+            transform=train_transform
         )
         
         # Load test dataset
+        print('\nLoading test dataset...', flush=True)
         test_dataset = PatientDicomDataset(
-            root_dir='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_test_data',
-            labels_file='/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/nlst_actual.csv',
-            transform=transform,
-            patient_scan_count=50
+            config=config,
+            is_train=False,
+            transform=test_transform
         )
         
         # Split dataset into train and validation
-        train_size = int(0.8 * len(full_dataset))
+        train_size = int(config['data']['train_val_split'] * len(full_dataset))
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(
             full_dataset, 
@@ -68,40 +124,57 @@ def main():
             generator=torch.Generator().manual_seed(seed)
         )
         
-        batch_size = 1
+        # Log dataset information
+        print("\nLogging dataset information...", flush=True)
+        log_dataset_info(train_dataset, 'train', mlflow_run)
+        log_dataset_info(val_dataset, 'val', mlflow_run)
+        log_dataset_info(test_dataset, 'test', mlflow_run)
+        print("Dataset information logged successfully", flush=True)
+        
+        batch_size = config['training']['batch_size']
         
         train_loader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False)
 
         # Initialize the model and wrap with DataParallel
-        model = DinoVisionTransformerCancerPredictor()
+        print("\nInitializing model...", flush=True)
+        model = DinoVisionTransformerCancerPredictor(config)
+        print(f"Model device before to(device): {next(model.parameters()).device}", flush=True)
+        
         if torch.cuda.device_count() > 1:
             print(f"Using {torch.cuda.device_count()} GPUs!", flush=True)
             model = nn.DataParallel(model)
         
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
+        print(f"Model device after to(device): {next(model.parameters()).device}", flush=True)
 
         # Set up loss function and optimizer
-        learning_rate = 0.0001
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        learning_rate = config['training']['learning_rate']
+        optimizer = optim.Adam(
+            model.parameters(), 
+            lr=learning_rate,
+            weight_decay=config['training']['optimizer']['weight_decay']
+        )
         print(f"Optimizer: {optimizer}", flush=True)
         print(f"Learning rate: {learning_rate}", flush=True)
 
         # Add learning rate scheduler
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5, min_lr=1e-7)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            'min',
+            patience=config['training']['scheduler']['patience'],
+            factor=config['training']['scheduler']['factor'],
+            min_lr=config['training']['scheduler']['min_lr']
+        )
 
         # Add early stopping
         best_val_loss = float('inf')
-        patience = 5
+        patience = config['training']['early_stopping']['patience']
         patience_counter = 0
 
         # Training loop
-        num_epochs = 30
+        num_epochs = config['training']['num_epochs']
         criterion = nn.BCEWithLogitsLoss()
-        
-        # Use automatic mixed precision
-        scaler = torch.cuda.amp.GradScaler()
         
         print(f"\nStarting training with:", flush=True)
         print(f"Batch size: {batch_size}", flush=True)
@@ -119,23 +192,26 @@ def main():
             'batch_size': batch_size,
             'num_epochs': num_epochs,
             'early_stopping_patience': patience,
-            'train_size': 0.8,
-            'seed': seed
+            'train_split': config['data']['train_val_split'],
+            'seed': seed,
+            'check_slice_thickness': config['data']['check_slice_thickness'],
+            'precision': 'float32'  # Log that we're using float32
         })
 
         # Log model configuration before training starts
         print("\nLogging model configuration...", flush=True)
         log_model_config(
             model=model.module if isinstance(model, nn.DataParallel) else model,
+            base_model=config['model']['dinov2_version'],
             dataset=full_dataset,
             optimizer=optimizer,
             scheduler=scheduler,
             criterion=criterion,
             num_epochs=num_epochs,
             training_duration="0:00:00",  # Will be updated after training
-            final_loss=None,  # Will be updated after training
             early_stopping_patience=patience,
-            batch_size=batch_size
+            batch_size=batch_size,
+            check_slice_thickness=config['data']['check_slice_thickness']
         )
         print("Model configuration logged successfully", flush=True)
 
@@ -157,31 +233,31 @@ def main():
                     
                     optimizer.zero_grad()
                     
-                    with torch.cuda.amp.autocast():
-                        outputs = model(inputs, positions, attention_masks)
-                        print(f"Outputs shape: {outputs.shape}", flush=True)
-                        print(f"Outputs: {outputs}", flush=True)
-                        print(f"Probability: {torch.sigmoid(outputs)}", flush=True)
-                        outputs = torch.clamp(outputs, min=-10, max=10)
-                        # Check for saturation
-                        if batch_idx == 0:  # Check first batch of each epoch
-                            check_loss_saturation(outputs, labels)
-                        loss = criterion(outputs, labels)
-                        
-                        # Check for NaN loss
-                        if torch.isnan(loss):
-                            print(f"Warning: NaN loss detected in batch {batch_idx}", flush=True)
-                            print(f"Outputs range: [{outputs.min().item():.2f}, {outputs.max().item():.2f}]", flush=True)
-                            print(f"Labels range: [{labels.min().item():.2f}, {labels.max().item():.2f}]", flush=True)
-                            # Skip this batch
-                            continue
+                    # Remove mixed precision context
+                    outputs = model(inputs, positions, attention_masks)
+                    outputs = torch.clamp(outputs, min=-10, max=10)
+                    # Check for saturation
+                    if batch_idx == 0:  # Check first batch of each epoch
+                        check_loss_saturation(outputs, labels)
+                    loss = criterion(outputs, labels)
+                    
+                    # Check for NaN loss
+                    if torch.isnan(loss):
+                        print(f"Warning: NaN loss detected in batch {batch_idx}", flush=True)
+                        print(f"Outputs range: [{outputs.min().item():.2f}, {outputs.max().item():.2f}]", flush=True)
+                        print(f"Labels range: [{labels.min().item():.2f}, {labels.max().item():.2f}]", flush=True)
+                        # Skip this batch
+                        continue
                     
                     # Add gradient clipping
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), 
+                        max_norm=config['training']['gradient_clipping']['max_norm']
+                    )
                     
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                    # Remove scaler usage
+                    loss.backward()
+                    optimizer.step()
                     
                     batch_loss = loss.item()
                     if not np.isnan(batch_loss):  # Only add non-NaN losses
@@ -191,6 +267,9 @@ def main():
                     # Log batch metrics
                     if not np.isnan(batch_loss):
                         mlflow.log_metric('train_batch_loss', batch_loss, step=epoch * len(train_loader) + batch_idx)
+                    
+                    # Clear cache after each batch
+                    torch.cuda.empty_cache()
                     
                 except RuntimeError as e:
                     print(f"Error in batch {batch_idx}: {e}", flush=True)
@@ -223,9 +302,6 @@ def main():
                         
                         with torch.cuda.amp.autocast():
                             outputs = model(inputs, positions, attention_masks)
-                            print(f"Outputs shape: {outputs.shape}", flush=True)
-                            print(f"Outputs: {outputs}", flush=True)
-                            print(f"Probability: {torch.sigmoid(outputs)}", flush=True)
                             outputs = torch.clamp(outputs, min=-10, max=10)
                             loss = criterion(outputs, labels)
                             
@@ -290,7 +366,7 @@ def main():
                 mlflow.pytorch.log_model(
                     model.module if isinstance(model, nn.DataParallel) else model,
                     "best_model",
-                    registered_model_name="DinoVisionTransformerCancerPredictor"
+                    registered_model_name=config['mlflow']['model_name']
                 )
             else:
                 patience_counter += 1
@@ -309,19 +385,19 @@ def main():
         mlflow.pytorch.log_model(
             model.module if isinstance(model, nn.DataParallel) else model,
             "final_model",
-            registered_model_name="DinoVisionTransformerCancerPredictor"
+            registered_model_name=config['mlflow']['model_name']
         )
         
         # Update model configuration with final metrics
         log_model_config(
             model=model.module if isinstance(model, nn.DataParallel) else model,
+            base_model=config['model']['dinov2_version'],
             dataset=full_dataset,
             optimizer=optimizer,
             scheduler=scheduler,
             criterion=criterion,
             num_epochs=num_epochs,
             training_duration=training_duration,
-            final_loss=final_loss,
             early_stopping_patience=patience,
             batch_size=batch_size
         )
@@ -334,7 +410,6 @@ def main():
         print(f"Optimizer: {optimizer}", flush=True)
         print(f"Learning Rate Scheduler: {scheduler}", flush=True)
         print(f"Training Duration: {training_duration}", flush=True)
-        print(f"Final Validation Loss: {final_loss:.4f}", flush=True)
         print(f"Best Validation Loss: {best_val_loss:.4f}", flush=True)
 
         # After training is complete, run inference and log metrics

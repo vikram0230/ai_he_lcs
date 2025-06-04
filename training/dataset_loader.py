@@ -8,19 +8,24 @@ import random
 from torch.utils.data import Dataset
 
 class PatientDicomDataset(Dataset):
-    def __init__(self, root_dir, labels_file, patient_scan_count=500, transform=None):
+    def __init__(self, config, is_train=True, transform=None):
         """
         Args:
-            root_dir (str): Directory containing patient folders
-            labels_file (str): Path to CSV file containing patient labels
+            config (dict): Configuration dictionary
+            is_train (bool): Whether this is training dataset
             transform: Image transformations
         """
-        self.root_dir = root_dir
+        self.config = config
         self.transform = transform
+        self.check_slice_thickness = config['data']['check_slice_thickness']
+        
+        # Set data directory based on whether this is training or test
+        self.root_dir = config['data']['train_data_dir'] if is_train else config['data']['test_data_dir']
+        self.patient_scan_count = config['data']['train_patient_scan_count'] if is_train else config['data']['test_patient_scan_count']
         
         # Load patient labels from CSV
         try:
-            self.labels_df = pd.read_csv(labels_file)
+            self.labels_df = pd.read_csv(config['data']['labels_file'])
             print(f"Loaded {len(self.labels_df)} records from CSV")
         except Exception as e:
             print(f"Error loading labels file: {e}")
@@ -31,7 +36,7 @@ class PatientDicomDataset(Dataset):
         
         # Get list of patient folders
         try:
-            patient_folders = [f for f in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, f))]
+            patient_folders = [f for f in os.listdir(self.root_dir) if os.path.isdir(os.path.join(self.root_dir, f))]
             patient_folders.sort()
         except Exception as e:
             print(f"Error reading patient directories: {e}")
@@ -46,7 +51,7 @@ class PatientDicomDataset(Dataset):
             for index, row in patient_records.iterrows():
                 if (row['canc_yr1'] == 1):
                     positive_patient_scans.append((patient_id, row['study_yr']))
-                else:
+                elif row['days_to_diagnosis'] == -1:
                     negative_patient_scans.append((patient_id, row['study_yr']))
         
         print(f"Found {len(positive_patient_scans)} positive study and {len(negative_patient_scans)} negative study")
@@ -56,11 +61,13 @@ class PatientDicomDataset(Dataset):
         valid_negative_scans = []
         
         # Process positive scans
+        print(f"Processing {len(positive_patient_scans)} positive scans")
         for patient_id, selected_study_yr in positive_patient_scans:
             if self._process_patient_scan(patient_id, selected_study_yr):
                 valid_positive_scans.append((patient_id, selected_study_yr))
         
         # Process negative scans
+        print(f"Processing {len(negative_patient_scans)} negative scans")
         for patient_id, selected_study_yr in negative_patient_scans:
             if self._process_patient_scan(patient_id, selected_study_yr):
                 valid_negative_scans.append((patient_id, selected_study_yr))
@@ -68,18 +75,18 @@ class PatientDicomDataset(Dataset):
         print(f"Found {len(valid_positive_scans)} valid positive scans and {len(valid_negative_scans)} valid negative scans")
         
         # Calculate how many to take from each group after validation
-        half_count = min(patient_scan_count // 2, len(valid_positive_scans), len(valid_negative_scans))
+        half_count = min(self.patient_scan_count // 2, len(valid_positive_scans), len(valid_negative_scans))
         
         # Randomly select from valid scans
         random.shuffle(valid_positive_scans)
         random.shuffle(valid_negative_scans)
         
-        selected_positive = valid_positive_scans[:half_count]
-        selected_negative = valid_negative_scans[:half_count]
+        self.selected_positive = valid_positive_scans[:half_count]
+        self.selected_negative = valid_negative_scans[:half_count]
         
         # Combine the selected patients
-        selected_patient_scans = selected_positive + selected_negative
-        print(f"Selected {len(selected_patient_scans)} patients ({len(selected_positive)} positive, {len(selected_negative)} negative)")
+        selected_patient_scans = self.selected_positive + self.selected_negative
+        print(f"Selected {len(selected_patient_scans)} patients ({len(self.selected_positive)} positive, {len(self.selected_negative)} negative)")
         
         # Create flat list of (patient_id, study_yr) pairs
         self.scan_list = [(pid, yr) for pid, yr in selected_patient_scans]
@@ -126,18 +133,38 @@ class PatientDicomDataset(Dataset):
                     print(f"Warning: No reconstruction folders found for patient {patient_id}, date {date_folder}")
                     continue
                 
-                # Find reconstruction with highest number of slices
-                max_slices = 0
+                # Find reconstruction with highest number of valid slices
+                max_valid_slices = 0
                 best_recon = None
                 
                 for recon_folder in recon_folders:
                     recon_path = os.path.join(scan_path, recon_folder)
-                    dicom_files = [f for f in os.listdir(recon_path) if f.endswith('.dcm')]
-                    num_slices = len(dicom_files)
+                    dicom_files = sorted([f for f in os.listdir(recon_path) if f.endswith('.dcm')],
+                                       key=lambda x: int(x.split('-')[1].split('.')[0]))
                     
-                    if num_slices >= 50 and num_slices > max_slices:
-                        max_slices = num_slices
-                        best_recon = recon_folder
+                    # Check slice thickness if enabled
+                    if self.check_slice_thickness:
+                        valid_slices = []
+                        for dicom_file in dicom_files:
+                            dicom_path = os.path.join(recon_path, dicom_file)
+                            try:
+                                dicom = pydicom.dcmread(dicom_path)
+                                slice_thickness = float(dicom.SliceThickness)
+                                if 1.5 <= slice_thickness <= 3.0:
+                                    valid_slices.append(dicom_file)
+                            except (AttributeError, ValueError) as e:
+                                print(f"Warning: Could not read slice thickness for {dicom_file}: {e}")
+                                continue
+                        
+                        if len(valid_slices) >= 50 and len(valid_slices) > max_valid_slices:
+                            max_valid_slices = len(valid_slices)
+                            best_recon = recon_folder
+                    else:
+                        # If not checking thickness, just use total number of slices
+                        num_slices = len(dicom_files)
+                        if num_slices >= 50 and num_slices > max_valid_slices:
+                            max_valid_slices = num_slices
+                            best_recon = recon_folder
                 
                 # Store scan if we found a valid reconstruction
                 if best_recon:
@@ -145,10 +172,10 @@ class PatientDicomDataset(Dataset):
                         'date': date_folder,
                         'reconstructions': [best_recon]  # Store only the best reconstruction
                     }
-                    print(f"Patient {patient_id}, date {date_folder}: Selected reconstruction {best_recon} with {max_slices} slices")
+                    print(f"Patient {patient_id}, date {date_folder}: Selected reconstruction {best_recon} with {max_valid_slices} valid slices")
                     return True
                 else:
-                    print(f"Skipping scan - Patient {patient_id}, date {date_folder}: No reconstruction with >= 50 slices found")
+                    print(f"Skipping scan - Patient {patient_id}, date {date_folder}: No reconstruction with >= 50 valid slices found")
         
         return False
     
@@ -173,12 +200,9 @@ class PatientDicomDataset(Dataset):
             dicom_files = sorted([f for f in os.listdir(recon_path) if f.endswith('.dcm')],
                                key=lambda x: int(x.split('-')[1].split('.')[0]))  # For files like '1-001.dcm'
             
-            # Skip reconstructions with fewer than 50 slices
-            if len(dicom_files) < 50:
-                print(f"Skipping reconstruction {recon_folder} with {len(dicom_files)} slices (< 50)")
-                continue
-            
             reconstruction_images = []
+            
+            # Process all slices
             for dicom_file in dicom_files:
                 dicom_path = os.path.join(recon_path, dicom_file)
                 dicom = pydicom.dcmread(dicom_path)
@@ -199,13 +223,13 @@ class PatientDicomDataset(Dataset):
         
         # Check if we have any valid reconstructions after filtering
         if not all_reconstructions:
-            raise ValueError(f"No valid reconstructions found for patient {patient_id}, study year {study_yr} (all had <50 slices)")
+            print(f"No valid reconstructions found for patient {patient_id}, study year {study_yr}")
             
         patient_tensor = torch.stack(all_reconstructions)
         print(f"Final patient tensor shape: {patient_tensor.shape}")  # [num_reconstructions, num_slices, C, H, W]
         
         # Create normalized slice positions based on slice numbers
-        num_slices = len(dicom_files)
+        num_slices = len(reconstruction_images)  # Use number of processed slices
         slice_positions = torch.linspace(0, 1, num_slices, dtype=torch.float32)
         
         # Get label for this patient and study year

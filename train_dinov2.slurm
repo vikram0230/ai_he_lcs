@@ -16,6 +16,9 @@ module load CUDA/11.7.0
 # Activate python environment
 source dinov2_env/bin/activate
 
+# Install xformers
+pip install -U xformers --index-url https://download.pytorch.org/whl/cu121
+
 # Set environment variables
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 # Remove CUDA_VISIBLE_DEVICES as we want to use both GPUs

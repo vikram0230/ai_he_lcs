@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 import mlflow
 import numpy as np
 import pandas as pd
+import torchvision.transforms as transforms
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 import torch
 from torch import nn, optim
@@ -78,6 +79,32 @@ def collate_fn(batch):
     }
 
 
+def create_transforms(transform_config):
+    """Create transforms from config."""
+    transform_list = []
+    for t in transform_config:
+        if t['name'] == 'Resize':
+            transform_list.append(transforms.Resize(t['size']))
+        elif t['name'] == 'RandomHorizontalFlip':
+            transform_list.append(transforms.RandomHorizontalFlip())
+        elif t['name'] == 'RandomRotation':
+            transform_list.append(transforms.RandomRotation(t['degrees']))
+        elif t['name'] == 'ColorJitter':
+            transform_list.append(transforms.ColorJitter(
+                brightness=t.get('brightness', 0),
+                contrast=t.get('contrast', 0)
+            ))
+        elif t['name'] == 'ToTensor':
+            transform_list.append(transforms.ToTensor())
+        elif t['name'] == 'Normalize':
+            transform_list.append(transforms.Normalize(
+                mean=t['mean'],
+                std=t['std']
+            ))
+    return transforms.Compose(transform_list)
+
+
+
 def save_checkpoint(model, optimizer, epoch, loss, path):
     """Save model checkpoint with training state."""
     checkpoint = {
@@ -105,12 +132,14 @@ def load_checkpoint(model, optimizer, path):
     return 0, float('inf')
 
 
-def setup_mlflow():
+def setup_mlflow(experiment_name=None):
     """Setup MLflow tracking."""
     mlflow.set_tracking_uri("file:./mlruns")
     
-    # Create a new experiment
-    experiment_name = "DINOv2 Cancer Prediction"
+    # Use provided experiment name or default
+    if experiment_name is None:
+        experiment_name = "DINOv2 Cancer Prediction"
+    
     try:
         experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment is None:
@@ -124,28 +153,14 @@ def setup_mlflow():
     return experiment_id
 
 
-def log_model_config(model, dataset, optimizer, scheduler, criterion, num_epochs, training_duration, final_loss, early_stopping_patience, batch_size):
+def log_model_config(model, base_model, dataset, optimizer, scheduler, criterion, num_epochs, training_duration, early_stopping_patience, batch_size, check_slice_thickness=False):
     """Log model configuration to MLflow."""
-    
-    # Dynamically extract predictor architecture
-    predictor_layers = []
-    for layer in model.predictor:
-        layer_info = {
-            'type': layer.__class__.__name__,
-        }
-        # Add layer-specific parameters
-        if isinstance(layer, nn.Dropout):
-            layer_info['p'] = layer.p
-        elif isinstance(layer, nn.Linear):
-            layer_info['in_features'] = layer.in_features
-            layer_info['out_features'] = layer.out_features
-        predictor_layers.append(layer_info)
-    
     config = {
-        'model_name': model.__class__.__name__,
-        'base_model': 'dinov2_vits14',
+        'base_model': f'dinov2_{base_model}',
         'feature_dim': model.transformer.embed_dim,
-        'num_transformer_layers': len(model.transformer.blocks),
+        'transformer_layers': len(model.transformer.blocks),
+        'unfrozen_layers': [i for i, param in enumerate(model.transformer.parameters()) if param.requires_grad],
+        'predictor_layers': [layer.out_features for layer in model.predictor if isinstance(layer, nn.Linear)],
         'num_slice_processor_layers': model.slice_processor.num_layers,
         'num_heads': model.slice_processor.layers[0].self_attn.num_heads,
         'dropout_rate': model.slice_processor.layers[0].dropout.p,
@@ -168,11 +183,7 @@ def log_model_config(model, dataset, optimizer, scheduler, criterion, num_epochs
         'use_gradient_checkpointing': False,
         'device': str(next(model.parameters()).device),
         'num_gpus': torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        'predictor_architecture': {
-            'layers': predictor_layers,
-            'total_parameters': sum(p.numel() for p in model.predictor.parameters()),
-            'trainable_parameters': sum(p.numel() for p in model.predictor.parameters() if p.requires_grad)
-        }
+        'check_slice_thickness': check_slice_thickness,
     }
     
     # Log all parameters
@@ -180,9 +191,14 @@ def log_model_config(model, dataset, optimizer, scheduler, criterion, num_epochs
     
     # Convert training duration to seconds
     if isinstance(training_duration, str):
-        # Parse the duration string (format: "HH:MM:SS.microseconds")
-        h, m, s = training_duration.split(':')
-        duration_seconds = float(h) * 3600 + float(m) * 60 + float(s)
+        # Parse the duration string (format: "DD:HH:MM:SS.microseconds")
+        parts = training_duration.split(':')
+        if len(parts) == 4:  # Has days
+            d, h, m, s = parts
+            duration_seconds = float(d) * 86400 + float(h) * 3600 + float(m) * 60 + float(s)
+        else:  # Original format without days
+            h, m, s = parts
+            duration_seconds = float(h) * 3600 + float(m) * 60 + float(s)
     else:
         duration_seconds = float(training_duration)
     
@@ -191,13 +207,42 @@ def log_model_config(model, dataset, optimizer, scheduler, criterion, num_epochs
         'training_duration_seconds': duration_seconds
     })
     
-    # If final_loss is provided, log it separately
-    if final_loss is not None:
-        mlflow.log_metrics({
-            'final_loss': final_loss
-        })
-    
     return config  # Return the config for potential reuse
+
+
+def log_dataset_info(dataset, dataset_name, mlflow_run):
+    """
+    Log dataset information to MLflow.
+    
+    Args:
+        dataset: The dataset to log information about (can be Subset or PatientDicomDataset)
+        dataset_name: Name of the dataset (e.g., 'train', 'val', 'test')
+        mlflow_run: MLflow run object
+    """
+    # Get the original dataset if this is a Subset
+    # original_dataset = dataset.dataset if hasattr(dataset, 'dataset') else dataset
+
+    try:
+        # Log dataset parameters
+        mlflow.log_params({
+            f'{dataset_name}_size': len(dataset),
+            f'{dataset_name}_positive_count': len(dataset.selected_positive),
+            f'{dataset_name}_negative_count': len(dataset.selected_negative),
+        })
+    except Exception as e:
+        print(f"Warning: Could not log dataset parameters: {e}", flush=True)
+    
+    # Create and log a summary plot
+    # try:
+    #     plt.figure(figsize=(10, 6))
+    #     plt.bar(['Negative', 'Positive'], [original_dataset.selected_negative, original_dataset.selected_positive])
+    #     plt.title(f'{dataset_name.capitalize()} Dataset Label Distribution')
+    #     plt.ylabel('Count')
+    #     plt.savefig(f'{dataset_name}_distribution.png')
+    #     mlflow.log_artifact(f'{dataset_name}_distribution.png')
+    #     plt.close()
+    # except Exception as e:
+    #     print(f"Warning: Could not create distribution plot: {e}", flush=True)
 
 
 def load_model_from_mlflow(run_id, model_name="best_model"):
@@ -224,7 +269,7 @@ def get_slurm_job_id():
 def ensure_log_dir():
     """Create logs directory with SLURM job ID if it doesn't exist."""
     slurm_id = get_slurm_job_id()
-    log_dir = f'logs/predictions_{slurm_id}'
+    log_dir = f'logs/predictions/predictions_{slurm_id}'
     os.makedirs(log_dir, exist_ok=True)
     return log_dir
 
@@ -234,7 +279,7 @@ def calculate_metrics(y_true, y_pred, y_prob):
     metrics = {}
     
     # Convert predictions to binary
-    y_pred_binary = (y_pred > 0.5).astype(int)
+    y_pred_binary = (y_prob > 0.5).astype(int)
     
     # Calculate metrics for year 1 prediction
     metrics['accuracy'] = accuracy_score(y_true, y_pred_binary)
@@ -272,7 +317,6 @@ def calculate_metrics(y_true, y_pred, y_prob):
     metrics['balanced_accuracy'] = (metrics['recall'] + metrics['specificity']) / 2
     
     return metrics
-
 def check_loss_saturation(outputs, labels):
     with torch.no_grad():
         # Get probabilities
@@ -292,114 +336,138 @@ def check_loss_saturation(outputs, labels):
         print(f"Individual losses - Positive: {pos_loss.mean():.4f}, Negative: {neg_loss.mean():.4f}", flush=True)
         return total_loss
 
-def run_inference_and_log_metrics(model, test_dataset, device, mlflow_run):
-    """Run inference on test dataset and log metrics to MLflow."""
-    print("\nRunning inference on test dataset...", flush=True)
-    
-    # Create log directory
-    log_dir = ensure_log_dir()
-    print(f"Storing outputs in: {log_dir}", flush=True)
-    
-    # Create test dataloader
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=1,
-        collate_fn=collate_fn,
-        shuffle=False
-    )
-    
-    # Initialize lists to store predictions and true labels
-    all_predictions = []
-    all_probabilities = []
-    all_true_labels = []
-    
-    # Perform inference
+def run_inference_and_log_metrics(model, test_dataset, device, mlflow_run, logging=True):
+    """Run inference on test dataset and log metrics."""
     model.eval()
+    all_predictions = []
+    all_labels = []
+    results = []  # List to store detailed results
+    
     with torch.no_grad():
-        for batch in tqdm(test_loader):
-            inputs = batch['images'].to(device)
-            positions = batch['positions'].to(device)
-            labels = batch['labels'].float().to(device)
-            attention_masks = batch['attention_mask'].to(device)
+        for idx in range(len(test_dataset)):
+            patient_id, study_yr = test_dataset.scan_list[idx]
+            patient_tensor, slice_positions, true_label = test_dataset[idx]
             
-            # Get model predictions
-            outputs = model(inputs, positions, attention_masks)
-            probabilities = torch.sigmoid(outputs)
+            # Move tensors to device and add batch dimension
+            patient_tensor = patient_tensor.unsqueeze(0).to(device)  # Add batch dimension
+            slice_positions = slice_positions.unsqueeze(0).to(device)  # Add batch dimension
             
-            # Store predictions and true labels
-            all_predictions.append(outputs.cpu().numpy())
-            all_probabilities.append(probabilities.cpu().numpy())
-            all_true_labels.append(labels.cpu().numpy())
+            # Create attention mask
+            B, R, S = patient_tensor.shape[:3]  # batch, reconstructions, slices
+            # attention_mask = torch.ones((B, R, S), dtype=torch.float32, device=device)
+            
+            # Get model prediction
+            output = model(patient_tensor, slice_positions)
+            prediction = torch.sigmoid(output).item()
+            
+            # Store results
+            results.append({
+                'patient_id': patient_id,
+                'study_yr': study_yr,
+                'true_label': true_label.item(),
+                'prediction': prediction
+            })
+            
+            # Store for metrics calculation
+            all_predictions.append(prediction)
+            all_labels.append(true_label.item())
+            
+            print(f"Patient {patient_id}, Study Year {study_yr}:")
+            print(f"True Label: {true_label.item():.2f}, Prediction: {prediction:.2f}")
     
-    # Concatenate all predictions and labels
-    all_predictions = np.concatenate(all_predictions, axis=0)
-    all_probabilities = np.concatenate(all_probabilities, axis=0)
-    all_true_labels = np.concatenate(all_true_labels, axis=0)
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
     
-    # Save predictions and true labels to CSV
-    results_df = pd.DataFrame({
-        'raw_predictions': all_predictions.flatten(),
-        'probabilities': all_probabilities.flatten(),
-        'true_labels': all_true_labels.flatten(),
-        'predicted_class': (all_probabilities > 0.5).flatten().astype(int)
-    })
-    
-    # Save to log directory
-    predictions_path = os.path.join(log_dir, 'model_predictions.csv')
-    results_df.to_csv(predictions_path, index=False)
-    print(f"\nPredictions saved to '{predictions_path}'", flush=True)
-    
-    # Log predictions CSV to MLflow
-    mlflow.log_artifact(predictions_path)
+    # Save results to CSV
+    results_path = 'inference_results.csv'
+    results_df.to_csv(results_path, index=False)
+    print(f"\nResults saved to {results_path}")
     
     # Calculate metrics
-    metrics = calculate_metrics(all_true_labels, all_predictions, all_probabilities)
+    all_predictions = np.array(all_predictions)
+    all_labels = np.array(all_labels)
     
-    # Log metrics to MLflow
-    mlflow.log_metrics({
-        'test_accuracy': metrics['accuracy'],
-        'test_precision': metrics['precision'],
-        'test_recall': metrics['recall'],
-        'test_f1': metrics['f1'],
-        'test_auc': metrics['auc']
-    })
+    # Convert predictions to binary using 0.5 threshold
+    binary_predictions = (all_predictions > 0.5).astype(int)
     
-    # Plot and save confusion matrix
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(metrics['confusion_matrix'], 
-                annot=True, fmt='d', cmap='Blues')
-    plt.title('Year 1 Cancer Prediction')
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
+    # Calculate metrics
+    accuracy = accuracy_score(all_labels, binary_predictions)
+    precision = precision_score(all_labels, binary_predictions)
+    recall = recall_score(all_labels, binary_predictions)
+    f1 = f1_score(all_labels, binary_predictions)
+    auc = roc_auc_score(all_labels, all_predictions)
     
-    # Save confusion matrix plot to log directory
-    confusion_matrix_path = os.path.join(log_dir, 'confusion_matrix.png')
-    plt.savefig(confusion_matrix_path)
+    # Calculate confusion matrix
+    cm = confusion_matrix(all_labels, binary_predictions)
+    
+    # Calculate confusion matrix metrics
+    tn, fp, fn, tp = cm.ravel()
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+    ppv = tp / (tp + fp) if (tp + fp) > 0 else 0  # Positive Predictive Value
+    npv = tn / (tn + fn) if (tn + fn) > 0 else 0  # Negative Predictive Value
+    
+    # Create a figure with two subplots side by side
+    plt.figure(figsize=(16, 6))
+    
+    # Plot confusion matrix
+    plt.subplot(1, 2, 1)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    
+    # Add confusion matrix metrics as text
+    plt.text(0.5, -0.3, f'Sensitivity: {sensitivity:.3f}\nSpecificity: {specificity:.3f}\nPPV: {ppv:.3f}\nNPV: {npv:.3f}',
+             horizontalalignment='center', transform=plt.gca().transAxes)
+    
+    # Plot ROC curve
+    plt.subplot(1, 2, 2)
+    from sklearn.metrics import roc_curve
+    fpr, tpr, _ = roc_curve(all_labels, all_predictions)
+    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {auc:.3f})')
+    plt.plot([0, 1], [0, 1], 'k--', label='Random')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic (ROC) Curve')
+    plt.legend(loc="lower right")
+    
+    # Save combined plot
+    plot_path = 'model_evaluation.png'
+    plt.tight_layout()
+    plt.savefig(plot_path, bbox_inches='tight')
     plt.close()
-    mlflow.log_artifact(confusion_matrix_path)
     
-    # Save metrics to CSV
-    metrics_df = pd.DataFrame({
-        'Metric': ['Accuracy', 'Precision', 'Recall', 'F1 Score', 'AUC-ROC'],
-        'Value': [
-            metrics['accuracy'],
-            metrics['precision'],
-            metrics['recall'],
-            metrics['f1'],
-            metrics['auc']
-        ]
-    })
+    metrics = {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'auc': auc,
+        'specificity': specificity,
+        'sensitivity': sensitivity,
+        'ppv': ppv,
+        'npv': npv
+    }
     
-    # Save metrics to log directory
-    metrics_path = os.path.join(log_dir, 'test_metrics.csv')
-    metrics_df.to_csv(metrics_path, index=False)
-    print(f"\nMetrics saved to '{metrics_path}'", flush=True)
+    if logging:
+        # Log metrics to MLflow
+        mlflow.log_metrics(metrics)
+        mlflow.log_artifact(results_path)
+        mlflow.log_artifact(plot_path)
     
-    # Log metrics CSV to MLflow
-    mlflow.log_artifact(metrics_path)
-    
-    print("\nAll outputs have been saved to:", log_dir, flush=True)
-    print("\nAll metrics have been logged to MLflow in the same run", flush=True)
+    print("\nTest Metrics Summary:")
+    print(f"Accuracy: {accuracy:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"F1 Score: {f1:.4f}")
+    print(f"AUC-ROC: {auc:.4f}")
+    print(f"Sensitivity: {sensitivity:.4f}")
+    print(f"Specificity: {specificity:.4f}")
+    print(f"PPV: {ppv:.4f}")
+    print(f"NPV: {npv:.4f}")
     
     return metrics
 
@@ -652,3 +720,4 @@ def run_inference_and_log_metrics(model, test_dataset, device, mlflow_run):
 #         })
         
 #         return model, avg_loss, training_duration, epoch + 1
+
