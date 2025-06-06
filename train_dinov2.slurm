@@ -4,11 +4,12 @@
 #SBATCH --error=logs/slurm_logs/dinov2_train_%j.out      # Name of error file (%j expands to jobId)
 #SBATCH --time=72:00:00            # Run time (hh:mm:ss) - 72 hours
 #SBATCH --nodes=1                  # Number of nodes
-#SBATCH --ntasks=1                 # Number of tasks
+#SBATCH --ntasks=1                 # Number of tasks (single task for single MIG slice)
 #SBATCH --cpus-per-task=4          # Number of CPU cores per task
 #SBATCH --mem=32G                  # Memory per node
-#SBATCH --gres=gpu:1               # Request 1 GPU
+#SBATCH --gres=gpu:3g.40gb:1       # Request 40GB GPU
 #SBATCH --partition=batch_gpu      # Specify partition/queue name
+#SBATCH --gpu-bind=closest         # Bind to closest GPU
 
 # Load necessary modules
 module load CUDA/11.7.0
@@ -16,13 +17,8 @@ module load CUDA/11.7.0
 # Activate python environment
 source dinov2_env/bin/activate
 
-# Install xformers
-pip install -U xformers --index-url https://download.pytorch.org/whl/cu121
-
 # Set environment variables
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-# Remove CUDA_VISIBLE_DEVICES as we want to use both GPUs
-# export CUDA_VISIBLE_DEVICES=0
 
 # Print some information about the job
 echo "Job started at $(date)"
@@ -31,10 +27,13 @@ echo "Number of GPUs: $(nvidia-smi -L | wc -l)"
 nvidia-smi
 
 # Install requirements
-# pip install -r requirements.txt
+pip install -r requirements.txt
 
-# Run the training script
-python training/dinov2_train.py
+# Run training with single MIG slice
+python training/train_model.py
+
+# Run training with distributed training across MIG slices
+# srun python -m torch.distributed.launch --nproc_per_node=3 training/train_model.py
 
 # Print completion message
-echo "Job finished at $(date)" 
+echo "Job finished at $(date)"

@@ -1,19 +1,19 @@
 import os
 import torch
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
-from dataset_loader import PatientDicomDataset
 import mlflow
 import mlflow.pytorch
 import numpy as np
-from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import yaml
 import seaborn as sns
-import argparse
+import sys
 
-from training.classifier import DinoVisionTransformerCancerPredictor
+# Add the parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from training.dinov2_classifier import DinoVisionTransformerCancerPredictor
 from training.helper_functions import create_transforms, run_inference_and_log_metrics, load_model_from_mlflow
+from training.dataset_loader import PatientDicomDataset
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -92,7 +92,7 @@ def run_attention_visualization(model: DinoVisionTransformerCancerPredictor, tes
     
     # Visualize attention maps
     print("\nVisualizing attention maps...")
-    visualize_dinov2_attention(attention_maps['dinov2_attention'])
+    visualize_dinov2_attention(attention_maps['attention'])
     visualize_slice_attention(attention_maps['slice_attention'])
     visualize_reconstruction_attention(attention_maps['reconstruction_attention'])
     
@@ -105,13 +105,13 @@ def run_attention_visualization(model: DinoVisionTransformerCancerPredictor, tes
     print(f"True Label: {true_label.item():.2f}")
     print(f"Prediction: {prediction:.2f}")
     print("\nAttention maps have been saved as:")
-    print("- dinov2_attention.png")
+    print("- attention.png")
     print("- slice_attention.png")
     print("- reconstruction_attention.png")
 
 def run_inference(model, test_dataset, device, mlflow_run):
     """Run inference on the test dataset."""
-    metrics = run_inference_and_log_metrics(model, test_dataset, device, mlflow_run, logging=False)
+    metrics = run_inference_and_log_metrics(model, test_dataset, device, mlflow_run, logging=True)
     
     print("\nInference complete!")
     print("\nTest Metrics Summary:")
@@ -123,33 +123,38 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    # Load config first
+    config = load_config('training/config.yaml')
+    
     # Load model from MLflow
-    run_id = '54b081730cfe42d58eec265348e8d217'
+    run_id = '85c08d04fffc40baa64ffc3638868f82'
     
     # Set the MLflow run context to the same run as the model
     with mlflow.start_run(run_id=run_id):
-        model = load_model_from_mlflow(run_id, 'final_model')
-        model = model.to(device)
-        model.eval()
-        
-        # Load config
-        config = load_config('training/config.yaml')
-        
-        # Set up data transformations from config
-        test_transform = create_transforms(config['transforms']['test'])
-        
-        # Load test dataset
-        test_dataset = PatientDicomDataset(
-            config=config,
-            is_train=False,
-            transform=test_transform
-        )
-        
-        run_attention = True
-        if run_attention:
-            run_attention_visualization(model, test_dataset, device)
-        else:
-            run_inference(model, test_dataset, device, mlflow.active_run())
+        try:
+            model = load_model_from_mlflow(run_id, 'final_model')
+            model = model.to(device)
+            model.eval()
+            
+            # Set up data transformations from config
+            test_transform = create_transforms(config['transforms']['test'])
+            
+            # Load test dataset
+            test_dataset = PatientDicomDataset(
+                config=config,
+                is_train=False,
+                transform=test_transform
+            )
+            
+            run_attention = False
+            if run_attention:
+                run_attention_visualization(model, test_dataset, device)
+            else:
+                run_inference(model, test_dataset, device, mlflow.active_run())
+                
+        except Exception as e:
+            print(f"Error during inference: {e}")
+            raise
 
 if __name__ == "__main__":
     main() 

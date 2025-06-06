@@ -155,59 +155,59 @@ def setup_mlflow(experiment_name=None):
 
 def log_model_config(model, base_model, dataset, optimizer, scheduler, criterion, num_epochs, training_duration, early_stopping_patience, batch_size, check_slice_thickness=False):
     """Log model configuration to MLflow."""
-    config = {
-        'base_model': f'dinov2_{base_model}',
-        'feature_dim': model.transformer.embed_dim,
-        'transformer_layers': len(model.transformer.blocks),
-        'unfrozen_layers': [i for i, param in enumerate(model.transformer.parameters()) if param.requires_grad],
-        'predictor_layers': [layer.out_features for layer in model.predictor if isinstance(layer, nn.Linear)],
-        'num_slice_processor_layers': model.slice_processor.num_layers,
-        'num_heads': model.slice_processor.layers[0].self_attn.num_heads,
-        'dropout_rate': model.slice_processor.layers[0].dropout.p,
-        'batch_size': batch_size,
-        'optimizer': optimizer.__class__.__name__,
-        'scheduler': scheduler.__class__.__name__,
-        'scheduler_patience': scheduler.patience,
-        'scheduler_factor': scheduler.factor,
-        'scheduler_min_lr': scheduler.min_lrs[0],
-        'early_stopping_patience': early_stopping_patience,
-        'num_epochs': num_epochs,
-        'dataset_size': len(dataset),
-        'image_size': '224x224',
-        'normalization_mean': str([0.485, 0.456, 0.406]),
-        'normalization_std': str([0.229, 0.224, 0.225]),
-        'min_slices': 50,
-        'num_outputs': 2,
-        'loss_function': criterion.__class__.__name__,
-        'use_amp': True,
-        'use_gradient_checkpointing': False,
-        'device': str(next(model.parameters()).device),
-        'num_gpus': torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        'check_slice_thickness': check_slice_thickness,
-    }
-    
-    # Log all parameters
-    mlflow.log_params(config)
-    
-    # Convert training duration to seconds
-    if isinstance(training_duration, str):
-        # Parse the duration string (format: "DD:HH:MM:SS.microseconds")
-        parts = training_duration.split(':')
-        if len(parts) == 4:  # Has days
-            d, h, m, s = parts
-            duration_seconds = float(d) * 86400 + float(h) * 3600 + float(m) * 60 + float(s)
-        else:  # Original format without days
-            h, m, s = parts
-            duration_seconds = float(h) * 3600 + float(m) * 60 + float(s)
-    else:
-        duration_seconds = float(training_duration)
-    
-    # Log initial metrics (only training duration)
-    mlflow.log_metrics({
-        'training_duration_seconds': duration_seconds
-    })
-    
-    return config  # Return the config for potential reuse
+    try:
+        # Get model type and feature dimensions
+        if hasattr(model.transformer, 'config'):  # RAD-DINO
+            model_type = 'RAD-DINO'
+            feature_dim = model.transformer.config.hidden_size
+        else:  # DINOv2
+            model_type = 'DINOv2'
+            feature_dim = model.transformer.patch_embed.embed_dim
+        
+        # Get number of parameters
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        # Get model architecture details
+        model_config = {
+            'model_type': model_type,
+            'base_model': base_model,
+            'feature_dim': feature_dim,
+            'total_parameters': total_params,
+            'trainable_parameters': trainable_params,
+            'frozen_parameters': total_params - trainable_params,
+            'num_epochs': num_epochs,
+            'training_duration': training_duration,
+            'early_stopping_patience': early_stopping_patience,
+            'batch_size': batch_size,
+            'check_slice_thickness': check_slice_thickness,
+            'optimizer': optimizer.__class__.__name__,
+            'scheduler': scheduler.__class__.__name__,
+            'criterion': criterion.__class__.__name__,
+            'dataset_size': len(dataset),
+            'num_classes': 1,  # Binary classification
+            'input_shape': (3, 224, 224),  # Standard input shape
+            'output_shape': (1,),  # Binary classification output
+        }
+        
+        # Log model configuration
+        mlflow.log_params(model_config)
+        
+        # Log model architecture as text
+        model_architecture = str(model)
+        mlflow.log_text(model_architecture, "model_architecture.txt")
+        
+        print("\nModel Configuration:", flush=True)
+        for key, value in model_config.items():
+            print(f"{key}: {value}", flush=True)
+        print("\nModel Architecture:", flush=True)
+        print(model_architecture, flush=True)
+        
+    except Exception as e:
+        print(f"Error logging model configuration: {e}", flush=True)
+        print(f"Model type: {type(model.transformer)}", flush=True)
+        print(f"Available attributes: {dir(model.transformer)}", flush=True)
+        raise e
 
 
 def log_dataset_info(dataset, dataset_name, mlflow_run):
@@ -247,18 +247,26 @@ def log_dataset_info(dataset, dataset_name, mlflow_run):
 
 def load_model_from_mlflow(run_id, model_name="best_model"):
     """Load a model from MLflow."""
-    # Load the model
     model_uri = f"runs:/{run_id}/{model_name}"
-    model = mlflow.pytorch.load_model(model_uri)
+    print(f"Loading model from {model_uri}")
     
-    # Get the run details
-    run = mlflow.get_run(run_id)
+    # Add current directory to Python path to ensure modules can be found
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
-    print(f"Loaded model from run: {run_id}", flush=True)
-    print(f"Model parameters: {run.data.params}", flush=True)
-    print(f"Model metrics: {run.data.metrics}", flush=True)
-    
-    return model
+    try:
+        model = mlflow.pytorch.load_model(model_uri)
+        print("Model loaded successfully")
+        return model
+    except ModuleNotFoundError as e:
+        print(f"Error loading model: {e}")
+        print("Attempting to fix module import issue...")
+        
+        # Try loading with map_location to CPU first
+        model = mlflow.pytorch.load_model(model_uri, map_location=torch.device('cpu'))
+        print("Model loaded successfully with CPU map_location")
+        return model
 
 
 def get_slurm_job_id():

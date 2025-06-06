@@ -2,6 +2,7 @@ import torch
 import math
 import torch.nn as nn
 from copy import deepcopy
+from common_components import AnatomicalPositionEncoding, ReconstructionAttention
 
 # DINOv2 model versions and their feature dimensions
 DINOV2_MODELS = {
@@ -16,39 +17,6 @@ def get_dinov2_model(version):
     if version not in DINOV2_MODELS:
         raise ValueError(f"Unsupported DINOv2 version: {version}. Supported versions are: {list(DINOV2_MODELS.keys())}")
     return torch.hub.load("facebookresearch/dinov2", DINOV2_MODELS[version]['name'])
-
-
-class AnatomicalPositionEncoding(nn.Module):
-    def __init__(self, feature_dim):
-        super().__init__()
-        self.position_mlp = nn.Sequential(
-            nn.Linear(1, feature_dim // 2),
-            nn.ReLU(),
-            nn.Linear(feature_dim // 2, feature_dim)
-        )
-    
-    def forward(self, z_positions):
-        # z_positions: (batch_size, num_slices, 1)
-        return self.position_mlp(z_positions)  # Output: (batch_size, num_slices, feature_dim)
-
-
-class ReconstructionAttention(nn.Module):
-    def __init__(self, feature_dim):
-        super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim // 2),
-            nn.ReLU(),
-            nn.Linear(feature_dim // 2, 1)
-        )
-    
-    def forward(self, recon_features):
-        # recon_features: [batch, num_recon, features]
-        # print(f"recon_features shape: {recon_features.shape}", flush=True)
-        attention_scores = self.attention(recon_features)  # [batch, num_recon, 1]
-        # print(f"attention_scores shape: {attention_scores.shape}", flush=True)
-        attention_weights = torch.softmax(attention_scores, dim=1)  # normalize across reconstructions
-        # print(f"attention_weights shape: {attention_weights.shape}", flush=True)
-        return attention_weights
 
 
 class DinoVisionTransformerCancerPredictor(nn.Module):
@@ -229,7 +197,7 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
                 # print(f"attention_weights shape: {attention_weights.shape}", flush=True)
                 # print(f"attention_weights: {attention_weights}", flush=True)
             
-            combined_features = torch.sum(attention_weights * recon_features, dim=(1,2))
+            combined_features = torch.sum(attention_weights * recon_features, dim=[1, 2])
             # print(f"combined_features shape: {combined_features.shape}", flush=True)
             final_features = combined_features
             # print(f"combined_features: {combined_features}", flush=True)
@@ -392,7 +360,7 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
             reconstruction_attention = self.reconstruction_attention(recon_features)
             
             return {
-                'dinov2_attention': dinov2_attention_maps,
+                'attention': dinov2_attention_maps,
                 'slice_attention': slice_attention_maps,
                 'reconstruction_attention': reconstruction_attention
             }
