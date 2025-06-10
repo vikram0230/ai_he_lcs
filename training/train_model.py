@@ -38,7 +38,34 @@ def get_model(config):
     else:
         raise ValueError(f"Unsupported model type: {model_type}. Supported types are: 'dinov2', 'rad_dino'")
 
+def print_memory_stats(prefix=""):
+    """Print detailed memory statistics"""
+    print(f"\n{prefix} Memory Statistics:", flush=True)
+    print(f"Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB", flush=True)
+    print(f"Cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB", flush=True)
+    print(f"Max Allocated: {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB", flush=True)
+    print(f"Max Cached: {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB", flush=True)
+    print(torch.cuda.memory_summary(), flush=True)
+
+def check_memory_leak(prev_allocated, prev_cached, threshold_mb=100):
+    """Check if memory usage has increased significantly"""
+    current_allocated = torch.cuda.memory_allocated() / 1024**2
+    current_cached = torch.cuda.memory_reserved() / 1024**2
+    
+    allocated_increase = current_allocated - prev_allocated
+    cached_increase = current_cached - prev_cached
+    
+    if allocated_increase > threshold_mb or cached_increase > threshold_mb:
+        print(f"\nWARNING: Potential memory leak detected!", flush=True)
+        print(f"Allocated memory increased by: {allocated_increase:.2f} MB", flush=True)
+        print(f"Cached memory increased by: {cached_increase:.2f} MB", flush=True)
+        return True
+    return False
+
 def main():
+    # Set PyTorch memory allocator settings to handle fragmentation
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
     # Load configuration
     config_path = 'training/config.yaml'
     config = load_config(config_path)
@@ -209,7 +236,18 @@ def main():
     )
     print("Model configuration logged successfully", flush=True)
 
+    # Initialize memory tracking
+    initial_allocated = torch.cuda.memory_allocated() / 1024**2
+    initial_cached = torch.cuda.memory_reserved() / 1024**2
+    print("\nInitial Memory State:", flush=True)
+    print(f"Initial Allocated: {initial_allocated:.2f} MB", flush=True)
+    print(f"Initial Cached: {initial_cached:.2f} MB", flush=True)
+
     for epoch in range(num_epochs):
+        # Track memory at start of epoch
+        epoch_start_allocated = torch.cuda.memory_allocated() / 1024**2
+        epoch_start_cached = torch.cuda.memory_reserved() / 1024**2
+        
         # Training phase
         model.train()
         train_loss = 0
@@ -220,14 +258,27 @@ def main():
         
         for batch_idx, batch in enumerate(train_loader):
             try:
+                # Track memory before batch
+                batch_start_allocated = torch.cuda.memory_allocated() / 1024**2
+                batch_start_cached = torch.cuda.memory_reserved() / 1024**2
+                
                 inputs = batch['images'].to(device)
                 positions = batch['positions'].to(device)
                 labels = batch['labels'].float().to(device)
                 attention_masks = batch['attention_mask'].to(device)
                 
+                clinical_features = batch.get('clinical_features')
+                if clinical_features is not None:
+                    clinical_features = clinical_features.to(device)
+                
                 optimizer.zero_grad()
                 
-                outputs = model(inputs, positions, attention_masks)
+                # Forward pass with or without clinical features
+                if clinical_features is not None:
+                    outputs = model(inputs, positions, attention_masks, clinical_features)
+                else:
+                    outputs = model(inputs, positions, attention_masks)
+                
                 outputs = torch.clamp(outputs, min=-10, max=10)
                 
                 if batch_idx == 0:
@@ -258,12 +309,15 @@ def main():
                     mlflow.log_metric('train_batch_loss', batch_loss, step=epoch * len(train_loader) + batch_idx)
                     print(f"Batch {batch_idx+1} Loss: {batch_loss:.4f}", flush=True)
                 
-                torch.cuda.empty_cache()
+                # Check for memory leaks after batch
+                if check_memory_leak(batch_start_allocated, batch_start_cached):
+                    print_memory_stats("After batch processing")
                 
             except RuntimeError as e:
                 print(f"Error in batch {batch_idx}: {e}", flush=True)
                 if "out of memory" in str(e):
-                    print(f"OOM in batch {batch_idx}. Exiting program...", flush=True)
+                    print(f"OOM in batch {batch_idx}. Memory state:", flush=True)
+                    print_memory_stats("OOM Error")
                     import sys
                     sys.exit()
                 else:
@@ -271,6 +325,10 @@ def main():
         
         # Calculate average loss only from valid batches
         avg_train_loss = train_loss / train_batch_count if train_batch_count > 0 else float('inf')
+        
+        # Check for memory leaks after epoch
+        if check_memory_leak(epoch_start_allocated, epoch_start_cached):
+            print_memory_stats("After epoch completion")
         
         # Validation phase
         model.eval()
@@ -282,12 +340,25 @@ def main():
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
                 try:
+                    # Track memory before validation batch
+                    val_batch_start_allocated = torch.cuda.memory_allocated() / 1024**2
+                    val_batch_start_cached = torch.cuda.memory_reserved() / 1024**2
+                    
                     inputs = batch['images'].to(device)
                     positions = batch['positions'].to(device)
                     labels = batch['labels'].float().to(device)
                     attention_masks = batch['attention_mask'].to(device)
                     
-                    outputs = model(inputs, positions, attention_masks)
+                    clinical_features = batch.get('clinical_features')
+                    if clinical_features is not None:
+                        clinical_features = clinical_features.to(device)
+                    
+                    # Forward pass with or without clinical features
+                    if clinical_features is not None:
+                        outputs = model(inputs, positions, attention_masks, clinical_features)
+                    else:
+                        outputs = model(inputs, positions, attention_masks)
+                    
                     outputs = torch.clamp(outputs, min=-10, max=10)
                     loss = criterion(outputs, labels)
                     
@@ -306,10 +377,19 @@ def main():
                         mlflow.log_metric('val_batch_loss', batch_loss, step=epoch * len(val_loader) + batch_idx)
                         print(f"Validation Batch {batch_idx+1} Loss: {batch_loss:.4f}", flush=True)
                     
+                    # Check for memory leaks after validation batch
+                    if check_memory_leak(val_batch_start_allocated, val_batch_start_cached):
+                        print_memory_stats("After validation batch")
+                    
+                    # Clear memory
+                    del inputs, positions, labels, attention_masks, outputs, loss
+                    torch.cuda.empty_cache()
+                    
                 except RuntimeError as e:
                     print(f"Error in validation batch {batch_idx}: {e}", flush=True)
                     if "out of memory" in str(e):
-                        print(f"OOM in validation batch {batch_idx}. Exiting program...", flush=True)
+                        print(f"OOM in validation batch {batch_idx}. Memory state:", flush=True)
+                        print_memory_stats("OOM Error")
                         import sys
                         sys.exit()
                     else:

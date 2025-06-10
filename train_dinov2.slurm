@@ -24,10 +24,20 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 echo "Job started at $(date)"
 echo "Running on host: $(hostname)"
 echo "Number of GPUs: $(nvidia-smi -L | wc -l)"
+echo "Initial GPU Status:"
 nvidia-smi
 
+# Start GPU monitoring in background
+(
+    while true; do
+        echo "=== GPU Status at $(date) ==="
+        nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv
+        sleep 300  # Check every 5 minutes
+    done
+) > gpu_monitor.log 2>&1 &
+
 # Install requirements
-pip install -r requirements.txt
+# pip install -r requirements.txt
 
 # Run training with single MIG slice
 python training/train_model.py

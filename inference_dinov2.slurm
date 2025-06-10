@@ -25,6 +25,8 @@ echo "Running on host: $(hostname)"
 echo "Number of GPUs: $(nvidia-smi -L | wc -l)"
 nvidia-smi
 
+pip install -r requirements.txt
+
 # Run the inference script
 python training/inference.py
 
