@@ -19,6 +19,9 @@ def collate_fn(batch):
     # for i, (img, pos, label) in enumerate(batch):
     #     print(f"Item {i}: Image shape: {img.shape}, Positions shape: {pos.shape}", flush=True)
     
+    # Check if batch contains clinical features
+    has_clinical_features = len(batch[0]) == 4
+    
     max_reconstructions = max(x[0].size(0) for x in batch)
     max_slices = max(x[0].size(1) for x in batch)
     print(f"Max reconstructions: {max_reconstructions}", flush=True)
@@ -28,8 +31,14 @@ def collate_fn(batch):
     positions = []
     labels = []
     attention_masks = []
+    clinical_features = [] if has_clinical_features else None
     
-    for img, pos, label in batch:
+    for item in batch:
+        if has_clinical_features:
+            img, pos, clin_feat, label = item
+        else:
+            img, pos, label = item
+            
         print(f"Processing item: img shape {img.shape}, pos shape {pos.shape}", flush=True)
 
         # Create 2D attention mask
@@ -65,18 +74,28 @@ def collate_fn(batch):
         positions.append(pos)
         labels.append(label)
         attention_masks.append(recon_mask)
+        
+        if has_clinical_features:
+            clinical_features.append(clin_feat)
 
     print("\nFinal batch shapes:", flush=True)
     print(f"Images: {torch.stack(images).shape}", flush=True)
     print(f"Positions: {torch.stack(positions).shape}", flush=True)
     print(f"Labels: {torch.stack(labels).shape}", flush=True)
+    if has_clinical_features:
+        print(f"Clinical Features: {torch.stack(clinical_features).shape}", flush=True)
     
-    return {
+    batch_dict = {
         'images': torch.stack(images),           # [batch, max_recon, max_slices, C, H, W]
         'positions': torch.stack(positions),     # [batch, max_slices]
         'labels': torch.stack(labels),
         'attention_mask': torch.stack(attention_masks)  # [batch, max_recon, max_slices]
     }
+    
+    if has_clinical_features:
+        batch_dict['clinical_features'] = torch.stack(clinical_features)
+    
+    return batch_dict
 
 
 def create_transforms(transform_config):
@@ -179,12 +198,12 @@ def log_model_config(model, base_model, dataset, optimizer, scheduler, criterion
             'num_epochs': num_epochs,
             'training_duration': training_duration,
             'early_stopping_patience': early_stopping_patience,
-            'batch_size': batch_size,
+        'batch_size': batch_size,
             'check_slice_thickness': check_slice_thickness,
-            'optimizer': optimizer.__class__.__name__,
-            'scheduler': scheduler.__class__.__name__,
+        'optimizer': optimizer.__class__.__name__,
+        'scheduler': scheduler.__class__.__name__,
             'criterion': criterion.__class__.__name__,
-            'dataset_size': len(dataset),
+        'dataset_size': len(dataset),
             'num_classes': 1,  # Binary classification
             'input_shape': (3, 224, 224),  # Standard input shape
             'output_shape': (1,),  # Binary classification output

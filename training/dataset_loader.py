@@ -18,6 +18,7 @@ class PatientDicomDataset(Dataset):
         self.config = config
         self.transform = transform
         self.check_slice_thickness = config['data']['check_slice_thickness']
+        self.use_clinical_features = config['data'].get('use_clinical_features', False)
         
         # Set data directory based on whether this is training or test
         self.root_dir = config['data']['train_data_dir'] if is_train else config['data']['test_data_dir']
@@ -30,6 +31,27 @@ class PatientDicomDataset(Dataset):
         except Exception as e:
             print(f"Error loading labels file: {e}")
             raise
+        
+        # Load clinical features if enabled
+        if self.use_clinical_features:
+            try:
+                clinical_features_path = config['data']['clinical_features']['file_path']
+                if not clinical_features_path:
+                    raise ValueError("Clinical features file path not specified in config")
+                self.clinical_features_df = pd.read_csv(clinical_features_path)
+                print(f"Loaded {len(self.clinical_features_df)} clinical feature records")
+                
+                # Validate required features
+                required_features = config['data']['clinical_features']['features']
+                missing_features = [f for f in required_features if f not in self.clinical_features_df.columns]
+                if missing_features:
+                    raise ValueError(f"Missing required clinical features: {missing_features}")
+                
+                # Set feature dimension in config
+                config['data']['clinical_features']['feature_dim'] = len(required_features)
+            except Exception as e:
+                print(f"Error loading clinical features: {e}")
+                raise
         
         # Create a mapping of patient scans
         self.patient_scans = {}
@@ -172,10 +194,11 @@ class PatientDicomDataset(Dataset):
                         'date': date_folder,
                         'reconstructions': [best_recon]  # Store only the best reconstruction
                     }
-                    print(f"Patient {patient_id}, date {date_folder}: Selected reconstruction {best_recon} with {max_valid_slices} valid slices")
+                    # print(f"Patient {patient_id}, date {date_folder}: Selected reconstruction {best_recon} with {max_valid_slices} valid slices")
                     return True
                 else:
-                    print(f"Skipping scan - Patient {patient_id}, date {date_folder}: No reconstruction with >= 50 valid slices found")
+                    pass
+                    # print(f"Skipping scan - Patient {patient_id}, date {date_folder}: No reconstruction with >= 50 valid slices found")
         
         return False
     
@@ -241,4 +264,21 @@ class PatientDicomDataset(Dataset):
         patient_label = torch.tensor(patient_label, dtype=torch.float32).unsqueeze(-1)  # Add extra dimension
         print(f"Got labels for Patient ID: {patient_id}, Study Year: {study_yr} => Patient Label: {patient_label}")
         
-        return patient_tensor, slice_positions, patient_label
+        # Get clinical features if enabled
+        if self.use_clinical_features:
+            clinical_features = self.clinical_features_df[
+                (self.clinical_features_df['pid'] == int(patient_id)) & 
+                (self.clinical_features_df['study_yr'] == int(study_yr))
+            ]
+            
+            if clinical_features.empty:
+                raise ValueError(f"No clinical features found for patient {patient_id}, study year {study_yr}")
+            
+            # Select only the required features
+            required_features = self.config['data']['clinical_features']['features']
+            clinical_features = clinical_features[required_features].values[0]
+            clinical_features = torch.tensor(clinical_features, dtype=torch.float32)
+            
+            return patient_tensor, slice_positions, clinical_features, patient_label
+        else:
+            return patient_tensor, slice_positions, patient_label

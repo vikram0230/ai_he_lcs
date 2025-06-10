@@ -59,9 +59,26 @@ class RadDinoClassifier(nn.Module):
             num_layers=config['model']['transformer']['num_layers']
         )
         
+        # Initialize clinical features processing if enabled
+        self.use_clinical_features = config['data'].get('use_clinical_features', False)
+        if self.use_clinical_features:
+            print("\nInitializing clinical features processing...", flush=True)
+            clinical_feature_dim = config['data']['clinical_features']['feature_dim']
+            self.clinical_processor = nn.Sequential(
+                nn.Linear(clinical_feature_dim, 256),
+                nn.LayerNorm(256),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(256, 128)
+            )
+            # Adjust predictor input dimension to include clinical features
+            predictor_input_dim = config['model']['feature_dim'] + 128
+        else:
+            predictor_input_dim = config['model']['feature_dim']
+        
         # Build predictor layers from config
         predictor_layers = []
-        prev_dim = config['model']['feature_dim']
+        prev_dim = predictor_input_dim
         
         # Process all layers except the last one
         for i, dim in enumerate(config['model']['predictor']['layers'][:-1]):
@@ -81,12 +98,13 @@ class RadDinoClassifier(nn.Module):
         
         self.reconstruction_attention = ReconstructionAttention(config['model']['feature_dim'])
 
-    def forward(self, x, slice_positions, attention_mask=None):
+    def forward(self, x, slice_positions, attention_mask=None, clinical_features=None):
         """
         Args:
             x: Input tensor (batch_size, num_reconstructions, num_slices, channels, height, width)
             slice_positions: Z-coordinates of slices (batch_size, num_slices)
             attention_mask: Attention mask for padding (batch_size, num_reconstructions, num_slices)
+            clinical_features: Optional clinical features tensor (batch_size, num_clinical_features)
         """
         # Print device information for debugging
         print(f"Input device: {x.device}", flush=True)
@@ -180,6 +198,12 @@ class RadDinoClassifier(nn.Module):
         else:
             # Reshape features from [1, 1, 168, 384] to [168, 384]
             final_features = features.squeeze(0).squeeze(0)  # Remove first two dimensions
+            
+        # Process clinical features if enabled and provided
+        if self.use_clinical_features and clinical_features is not None:
+            clinical_features = clinical_features.to(model_device)
+            clinical_embeddings = self.clinical_processor(clinical_features)
+            final_features = torch.cat([final_features, clinical_embeddings], dim=1)
             
         print(f"final_features shape: {final_features.shape}", flush=True)
         return self.predictor(final_features)

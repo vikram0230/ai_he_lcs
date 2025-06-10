@@ -9,6 +9,12 @@ data:
   test_patient_scan_count: 200
   check_slice_thickness: false
   train_val_split: 0.8
+  use_clinical_features: false  # Flag to control clinical features usage
+  clinical_features:
+    enabled: false
+    file_path: ''  # Path to clinical features CSV
+    feature_dim: 0  # Will be set based on actual features
+    features: []  # List of clinical features to use
 
 # Model Parameters
 model:
