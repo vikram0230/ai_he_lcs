@@ -1,47 +1,57 @@
-import sys
 import torch
-import torch.nn as nn
-from transformers import AutoModel, AutoImageProcessor
-from PIL import Image
 import math
-from common_components import AnatomicalPositionEncoding, ReconstructionAttention
-import numpy as np
+import torch.nn as nn
+from copy import deepcopy
+from src.utils.common_components import AnatomicalPositionEncoding, ReconstructionAttention
+
+# DINOv2 model versions and their feature dimensions
+DINOV2_MODELS = {
+    'vits14': {'name': 'dinov2_vits14', 'feature_dim': 384},
+    'vitb14': {'name': 'dinov2_vitb14', 'feature_dim': 768},
+    'vitl14': {'name': 'dinov2_vitl14', 'feature_dim': 1024},
+    'vitg14': {'name': 'dinov2_vitg14', 'feature_dim': 1536}
+}
+
+def get_dinov2_model(version):
+    """Load the specified DINOv2 model version."""
+    if version not in DINOV2_MODELS:
+        raise ValueError(f"Unsupported DINOv2 version: {version}. Supported versions are: {list(DINOV2_MODELS.keys())}")
+    return torch.hub.load("facebookresearch/dinov2", DINOV2_MODELS[version]['name'])
 
 
-class RadDinoClassifier(nn.Module):
+class DinoVisionTransformerCancerPredictor(nn.Module):
     def __init__(self, config):
         super().__init__()
         
-        print("\nInitializing RadDinoClassifier...", flush=True)
+        print("\nInitializing DinoVisionTransformerCancerPredictor...", flush=True)
         
-        # Load RAD-DINO model
-        self.model_name = "microsoft/rad-dino"
-        print(f"Loading RAD-DINO model: {self.model_name}", flush=True)
-        self.transformer = AutoModel.from_pretrained(self.model_name)
-        self.processor = AutoImageProcessor.from_pretrained(self.model_name)
+        # Get DINOv2 model version and feature dimensions
+        dinov2_version = config['model']['dinov2_version']
+        print(f"Loading DINOv2 model version: {dinov2_version}", flush=True)
+        self.transformer = deepcopy(get_dinov2_model(dinov2_version))
         
         # Force model to float32 to avoid xFormers issues
         self.transformer = self.transformer.float()
         print(f"Transformer device: {next(self.transformer.parameters()).device}", flush=True)
         
-        # Set feature dimensions based on model
-        feature_dim = self.transformer.config.hidden_size
+        # Set feature dimensions based on model version
+        feature_dim = DINOV2_MODELS[dinov2_version]['feature_dim']
         config['model']['feature_dim'] = feature_dim
         config['model']['position_encoding_dim'] = feature_dim
         
         # Freeze all parameters
         for param in self.transformer.parameters():
             param.requires_grad = False
-        print(f"Running with frozen RAD-DINO", flush=True)
+        print(f"Running with frozen DINOv2 {dinov2_version}", flush=True)
 
-        # Unfreeze the last few layers if specified in config
+        # Unfreeze the last few layers of DINOv2 if specified in config
         if config['model'].get('unfreeze_last_layers', False):
             for name, param in self.transformer.named_parameters():
-                if any(f'layer.{i}' in name for i in config['model'].get('unfreeze_layers', [9, 10, 11])):
+                if any(f'blocks.{i}' in name for i in config['model'].get('unfreeze_layers', [9, 10, 11])):
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
-            print(f"Running with unfrozen last few layers of RAD-DINO", flush=True)
+            print(f"Running with unfrozen last few layers of DINOv2 {dinov2_version}", flush=True)
         
         self.position_encoding = AnatomicalPositionEncoding(config['model']['position_encoding_dim'])
         print(f"Position encoding device: {next(self.position_encoding.parameters()).device}", flush=True)
@@ -59,26 +69,9 @@ class RadDinoClassifier(nn.Module):
             num_layers=config['model']['transformer']['num_layers']
         )
         
-        # Initialize clinical features processing if enabled
-        self.use_clinical_features = config['data'].get('use_clinical_features', False)
-        if self.use_clinical_features:
-            print("\nInitializing clinical features processing...", flush=True)
-            clinical_feature_dim = config['data']['clinical_features']['feature_dim']
-            self.clinical_processor = nn.Sequential(
-                nn.Linear(clinical_feature_dim, 256),
-                nn.LayerNorm(256),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(256, 128)
-            )
-            # Adjust predictor input dimension to include clinical features
-            predictor_input_dim = config['model']['feature_dim'] + 128
-        else:
-            predictor_input_dim = config['model']['feature_dim']
-        
         # Build predictor layers from config
         predictor_layers = []
-        prev_dim = predictor_input_dim
+        prev_dim = config['model']['feature_dim']
         
         # Process all layers except the last one
         for i, dim in enumerate(config['model']['predictor']['layers'][:-1]):
@@ -98,13 +91,12 @@ class RadDinoClassifier(nn.Module):
         
         self.reconstruction_attention = ReconstructionAttention(config['model']['feature_dim'])
 
-    def forward(self, x, slice_positions, attention_mask=None, clinical_features=None):
+    def forward(self, x, slice_positions, attention_mask=None):
         """
         Args:
             x: Input tensor (batch_size, num_reconstructions, num_slices, channels, height, width)
             slice_positions: Z-coordinates of slices (batch_size, num_slices)
             attention_mask: Attention mask for padding (batch_size, num_reconstructions, num_slices)
-            clinical_features: Optional clinical features tensor (batch_size, num_clinical_features)
         """
         # Print device information for debugging
         print(f"Input device: {x.device}", flush=True)
@@ -128,18 +120,9 @@ class RadDinoClassifier(nn.Module):
         
         # Process all images in one go
         try:
-            # Convert to PIL images for RAD-DINO processor
-            pil_images = []
-            for img in x_reshaped:
-                # Convert to numpy and transpose to (H, W, C)
-                img_np = img.cpu().numpy().transpose(1, 2, 0)
-                # Normalize to 0-255 range and convert to uint8
-                img_np = ((img_np - img_np.min()) / (img_np.max() - img_np.min()) * 255).astype(np.uint8)
-                pil_images.append(Image.fromarray(img_np))
-            inputs = self.processor(images=pil_images, return_tensors="pt").to(model_device)
-            features = self.transformer(**inputs).last_hidden_state  # [B*R*S, num_patches+1, hidden_size]
-            features = features[:, 0, :]  # [B*R*S, hidden_size]  # CLS token only
-            features = features.view(B, R, S, -1)  # [B, R, S, hidden_size]
+            features = self.transformer(x_reshaped)  # [B*R*S, feature_dim]
+            features = features.view(B, R, S, -1)  # [B, R, S, feature_dim]
+            features = self.transformer.norm(features)
         except Exception as e:
             print(f"Error in transformer forward pass: {e}", flush=True)
             print(f"Input shape: {x_reshaped.shape}, Device: {x_reshaped.device}", flush=True)
@@ -152,11 +135,17 @@ class RadDinoClassifier(nn.Module):
             recon_features = []
             for r in range(R):
                 slice_features = features[:, r]  # [B, S, feature_dim]
+                # print(f"slice_features shape: {slice_features.shape}", flush=True)
+                # print(f"slice_features: {slice_features}", flush=True)
                 
                 # Add positional encoding
                 positions = slice_positions.unsqueeze(-1)
                 position_encoding = self.position_encoding(positions)
+                # print(f"position_encoding shape: {position_encoding.shape}", flush=True)
+                # print(f"position_encoding: {position_encoding}", flush=True)
                 slice_features_with_position_encoding = slice_features + position_encoding
+                # print(f"slice_features_with_position_encoding shape: {slice_features_with_position_encoding.shape}", flush=True)
+                # print(f"slice_features_with_position_encoding: {slice_features_with_position_encoding}", flush=True)
                 
                 # Handle masking
                 if attention_mask is not None:
@@ -164,17 +153,23 @@ class RadDinoClassifier(nn.Module):
                     key_padding_mask = ~mask.bool()  # For transformer
                 else:
                     key_padding_mask = None
+                # print(f"key_padding_mask shape: {key_padding_mask.shape}", flush=True)
+                # print(f"key_padding_mask: {key_padding_mask}", flush=True)
                 
                 # Process through slice transformer
                 processed_slice_sequence = self.slice_processor(
                     slice_features_with_position_encoding,
                     src_key_padding_mask=key_padding_mask
                 )
+                # print(f"processed_slice_sequence shape: {processed_slice_sequence.shape}", flush=True)
+                # print(f"processed_slice_sequence: {processed_slice_sequence}", flush=True)
                 
                 # Attention pooling with masking
                 if attention_mask is not None:
                     mask = mask.unsqueeze(1)  # [B, 1, S]
                     processed_slice_sequence = processed_slice_sequence * mask.unsqueeze(-1)
+                    # print(f"processed_slice_sequence with mask shape: {processed_slice_sequence.shape}", flush=True)
+                    # print(f"processed_slice_sequence with mask: {processed_slice_sequence}", flush=True)
                 
                 # Pool features
                 recon_feature = processed_slice_sequence.mean(dim=1)  # [B, feature_dim]
@@ -182,30 +177,36 @@ class RadDinoClassifier(nn.Module):
             
             # Stack and apply reconstruction attention
             recon_features = torch.stack(recon_features, dim=1)  # [B, R, feature_dim]
+            # print(f"recon_features shape: {recon_features.shape}", flush=True)
+            # print(f"recon_features: {recon_features}", flush=True)
             
             # Apply reconstruction attention
             if attention_mask is not None:
+                # print(f"attention_mask shape: {attention_mask.shape}", flush=True)
                 recon_mask = (attention_mask.sum(dim=-1) > 0).float()  # [B, R]
+                # print(f"recon_mask shape: {recon_mask.shape}", flush=True)
                 attention_weights = self.reconstruction_attention(recon_features)
+                # print(f"attention_weights shape: {attention_weights.shape}", flush=True)
+                # print(f"attention_weights: {attention_weights}", flush=True)
                 attention_weights = attention_weights * recon_mask.unsqueeze(-1).unsqueeze(-1)
                 attention_weights = attention_weights / (attention_weights.sum(dim=1, keepdim=True) + 1e-9)
+                # print(f"attention_weights shape after masking: {attention_weights.shape}", flush=True)
             else:
+                # print(f"recon_features shape: {recon_features.shape}", flush=True)
                 attention_weights = self.reconstruction_attention(recon_features)
+                # print(f"attention_weights shape: {attention_weights.shape}", flush=True)
+                # print(f"attention_weights: {attention_weights}", flush=True)
             
-            combined_features = torch.sum(attention_weights * recon_features, dim=[1,2])
+            combined_features = torch.sum(attention_weights * recon_features, dim=[1, 2])
+            # print(f"combined_features shape: {combined_features.shape}", flush=True)
             final_features = combined_features
+            # print(f"combined_features: {combined_features}", flush=True)
         
         else:
             # Reshape features from [1, 1, 168, 384] to [168, 384]
             final_features = features.squeeze(0).squeeze(0)  # Remove first two dimensions
+            # print(f"final_features shape: {final_features.shape}", flush=True)
             
-        # Process clinical features if enabled and provided
-        if self.use_clinical_features and clinical_features is not None:
-            clinical_features = clinical_features.to(model_device)
-            clinical_embeddings = self.clinical_processor(clinical_features)
-            final_features = torch.cat([final_features, clinical_embeddings], dim=1)
-            
-        print(f"final_features shape: {final_features.shape}", flush=True)
         return self.predictor(final_features)
 
     def predict_probabilities(self, x):
@@ -225,16 +226,16 @@ class RadDinoClassifier(nn.Module):
             probabilities = torch.sigmoid(logits)
         return probabilities
 
-    def extract_features(self, x):
+    def extract_dinov2_features(self, x):
         """
-        Extract and analyze RAD-DINO features for visualization.
+        Extract and analyze DINOv2 features for visualization.
         
         Args:
             x: Input tensor of shape (batch_size, num_reconstructions, num_slices, channels, height, width)
             
         Returns:
             Dictionary containing:
-            - raw_features: Raw RAD-DINO features
+            - raw_features: Raw DINOv2 features
             - feature_stats: Statistics about the features
             - feature_visualization: Visualization of feature patterns
         """
@@ -245,27 +246,19 @@ class RadDinoClassifier(nn.Module):
             # Reshape to batch all images together
             x_reshaped = x.view(B * R * S, C, H, W)
             
-            # Get RAD-DINO features
+            # Get DINOv2 features
             # Process in smaller batches to avoid memory issues
             batch_size = 32
             features_list = []
             
             for i in range(0, B * R * S, batch_size):
                 batch_x = x_reshaped[i:i + batch_size]
-                # Convert to PIL images for RAD-DINO processor
-                pil_images = []
-                for img in batch_x:
-                    # Convert to numpy and transpose to (H, W, C)
-                    img_np = img.cpu().numpy().transpose(1, 2, 0)
-                    # Normalize to 0-255 range and convert to uint8
-                    img_np = ((img_np - img_np.min()) / (img_np.max() - img_np.min()) * 255).astype(np.uint8)
-                    pil_images.append(Image.fromarray(img_np))
-                inputs = self.processor(images=pil_images, return_tensors="pt").to(next(self.parameters()).device)
-                batch_features = self.transformer(**inputs).last_hidden_state
+                batch_features = self.transformer(batch_x)
                 features_list.append(batch_features)
             
             features = torch.cat(features_list, dim=0)
             features = features.view(B, R, S, -1)  # [B, R, S, feature_dim]
+            features = self.transformer.norm(features)
             
             # Calculate statistics
             feature_stats = {
@@ -289,14 +282,14 @@ class RadDinoClassifier(nn.Module):
 
     def get_attention_maps(self, x):
         """
-        Extract attention maps from the RAD-DINO transformer.
+        Extract attention maps from the DINOv2 transformer.
         
         Args:
             x: Input tensor of shape (batch_size, num_reconstructions, num_slices, channels, height, width)
             
         Returns:
             Dictionary containing:
-            - rad_dino_attention: Attention maps from RAD-DINO transformer layers
+            - dinov2_attention: Attention maps from DINOv2 transformer layers
             - slice_attention: Attention maps from slice processor
             - reconstruction_attention: Attention weights for reconstructions
         """
@@ -307,15 +300,33 @@ class RadDinoClassifier(nn.Module):
             # Reshape to batch all images together
             x_reshaped = x.view(B * R * S, C, H, W)
             
-            # Get attention maps from RAD-DINO transformer
-            rad_dino_attention_maps = []
-            for layer in self.transformer.encoder.layer:
-                # Get attention weights from the layer
-                attention_output = layer.attention(x_reshaped)
-                rad_dino_attention_maps.append(attention_output.attn_weights)
+            # Get patch embeddings first
+            x_emb = self.transformer.prepare_tokens_with_masks(x_reshaped)[0]  # [B*R*S, num_patches, embed_dim]
+            
+            # Get attention maps from DINOv2 transformer
+            dinov2_attention_maps = []
+            for block in self.transformer.blocks:
+                # Get attention weights from the block
+                # For MemEffAttention, we need to compute attention weights manually
+                qkv = block.attn.qkv(x_emb)  # [B*R*S, seq_len, 3*num_heads*head_dim]
+                # Calculate head_dim from embedding dimension and number of heads
+                head_dim = block.attn.qkv.out_features // (3 * block.attn.num_heads)
+                # Split into Q, K, V
+                qkv = qkv.reshape(B * R * S, -1, 3, block.attn.num_heads, head_dim)
+                qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B*R*S, num_heads, seq_len, head_dim]
+                q, k, v = qkv.unbind(0)  # Each is [B*R*S, num_heads, seq_len, head_dim]
+                
+                # Compute attention scores
+                attn = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                attn = attn.softmax(dim=-1)
+                dinov2_attention_maps.append(attn)
+                
+                # Update embeddings for next layer
+                x_emb = block(x_emb)
             
             # Process through the model to get slice and reconstruction attention
-            features = self.transformer(x_reshaped).last_hidden_state
+            features = self.transformer.norm(x_emb)  # [B*R*S, num_patches, embed_dim]
+            features = features.mean(dim=1)  # [B*R*S, embed_dim]
             features = features.view(B, R, S, -1)  # [B, R, S, feature_dim]
             
             # Get slice attention maps
@@ -349,7 +360,7 @@ class RadDinoClassifier(nn.Module):
             reconstruction_attention = self.reconstruction_attention(recon_features)
             
             return {
-                'attention': rad_dino_attention_maps,
+                'attention': dinov2_attention_maps,
                 'slice_attention': slice_attention_maps,
                 'reconstruction_attention': reconstruction_attention
             }

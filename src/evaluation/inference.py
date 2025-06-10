@@ -11,9 +11,9 @@ import sys
 # Add the parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from training.dinov2_classifier import DinoVisionTransformerCancerPredictor
-from training.helper_functions import create_transforms, run_inference_and_log_metrics, load_model_from_mlflow
-from training.dataset_loader import PatientDicomDataset
+from src.models.dinov2_classifier import DinoVisionTransformerCancerPredictor
+from src.utils.helper_functions import HelperUtils
+from src.data.dataset_loader import PatientDicomDataset
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -109,9 +109,9 @@ def run_attention_visualization(model: DinoVisionTransformerCancerPredictor, tes
     print("- slice_attention.png")
     print("- reconstruction_attention.png")
 
-def run_inference(model, test_dataset, device, mlflow_run):
+def run_inference(model, test_dataset, device, mlflow_run, helper):
     """Run inference on the test dataset."""
-    metrics = run_inference_and_log_metrics(model, test_dataset, device, mlflow_run, logging=True)
+    metrics = helper.run_inference_and_log_metrics(model, test_dataset, device, mlflow_run, logging=True)
     
     print("\nInference complete!")
     print("\nTest Metrics Summary:")
@@ -119,25 +119,28 @@ def run_inference(model, test_dataset, device, mlflow_run):
     print(f"AUC-ROC: {metrics['auc']:.4f}")
 
 def main():
+    # Parse command line arguments
+    args = HelperUtils.parse_args(mode='inference')
+    
+    # Initialize helper utils
+    helper = HelperUtils()
+    
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Load config first
-    config = load_config('training/config.yaml')
-    
-    # Load model from MLflow
-    run_id = '85c08d04fffc40baa64ffc3638868f82'
+    # Load config
+    config = load_config(args.config)
     
     # Set the MLflow run context to the same run as the model
-    with mlflow.start_run(run_id=run_id):
+    with mlflow.start_run(run_id=args.run_id):
         try:
-            model = load_model_from_mlflow(run_id, 'final_model')
+            model = HelperUtils.load_model_from_mlflow(args.run_id, 'best_model')
             model = model.to(device)
             model.eval()
             
             # Set up data transformations from config
-            test_transform = create_transforms(config['transforms']['test'])
+            test_transform = HelperUtils.create_transforms(config['transforms']['test'])
             
             # Load test dataset
             test_dataset = PatientDicomDataset(
@@ -146,11 +149,10 @@ def main():
                 transform=test_transform
             )
             
-            run_attention = False
-            if run_attention:
+            if args.visualize_attention:
                 run_attention_visualization(model, test_dataset, device)
             else:
-                run_inference(model, test_dataset, device, mlflow.active_run())
+                run_inference(model, test_dataset, device, mlflow.active_run(), helper)
                 
         except Exception as e:
             print(f"Error during inference: {e}")

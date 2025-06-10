@@ -41,16 +41,23 @@ training:
     patience: 10
   optimizer:
     name: 'Adam'
-    weight_decay: 0.0
+    weight_decay: 0.01  # Increased for better regularization
   scheduler:
     name: 'ReduceLROnPlateau'
+    # name: 'CosineAnnealingWarmupRestarts'
     patience: 2
     factor: 0.5
     min_lr: 0.0000001
+    warmup_epochs: 5  # Number of epochs for warmup
   loss:
     name: 'BCEWithLogitsLoss'
   gradient_clipping:
     max_norm: 1.0
+  # New training improvements
+  mixup_alpha: 0.2  # Alpha parameter for mixup augmentation
+  cutmix_alpha: 1.0  # Alpha parameter for cutmix augmentation
+  curriculum_levels: [0.3, 0.6, 1.0]  # Difficulty levels for curriculum learning
+  curriculum_transitions: [10, 20]  # Epochs to transition between difficulty levels
 
 # Data Augmentation
 transforms:

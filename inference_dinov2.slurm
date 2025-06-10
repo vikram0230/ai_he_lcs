@@ -28,7 +28,7 @@ nvidia-smi
 pip install -r requirements.txt
 
 # Run the inference script
-python training/inference.py
+python src/training/inference.py
 
 # Print completion message
 echo "Job finished at $(date)" 

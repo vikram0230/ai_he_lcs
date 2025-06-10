@@ -1,9 +1,9 @@
 import torch
 from torch.utils.data import DataLoader
 from torch import nn, optim
-from training.dinov2_classifier import DinoVisionTransformerCancerPredictor
-from training.rad_dino_classifier import RadDinoClassifier
-from training.dataset_loader import PatientDicomDataset
+from src.models.dinov2_classifier import DinoVisionTransformerCancerPredictor
+from src.models.rad_dino_classifier import RadDinoClassifier
+from src.data.dataset_loader import PatientDicomDataset
 import datetime
 import mlflow
 import mlflow.pytorch
@@ -12,7 +12,7 @@ import random
 import yaml
 import os
 
-from training.helper_functions import check_loss_saturation, collate_fn, create_transforms, ensure_log_dir, log_dataset_info, log_model_config, run_inference_and_log_metrics, setup_mlflow
+from src.utils.helper_functions import HelperUtils
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -63,15 +63,20 @@ def check_memory_leak(prev_allocated, prev_cached, threshold_mb=100):
     return False
 
 def main():
+    # Parse command line arguments
+    args = HelperUtils.parse_args(mode='train')
+    
+    # Initialize helper utils
+    helper = HelperUtils()
+    
     # Set PyTorch memory allocator settings to handle fragmentation
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     
     # Load configuration
-    config_path = 'training/config.yaml'
-    config = load_config(config_path)
+    config = load_config(args.config)
     
     # Setup MLflow
-    experiment_id = setup_mlflow(config['mlflow']['experiment_name'])
+    experiment_id = HelperUtils.setup_mlflow(config['mlflow']['experiment_name'])
     print(f"\nExperiment ID: {experiment_id}", flush=True)
     
     # Set random seed for reproducibility
@@ -111,12 +116,12 @@ def main():
     
     # Log config file as artifact
     print("\nLogging config file as artifact...", flush=True)
-    mlflow.log_artifact(config_path, "config")
+    mlflow.log_artifact(args.config, "config")
     print("Config file logged successfully", flush=True)
 
     # Set up data transformations
-    train_transform = create_transforms(config['transforms']['train'])
-    test_transform = create_transforms(config['transforms']['test'])
+    train_transform = HelperUtils.create_transforms(config['transforms']['train'])
+    test_transform = HelperUtils.create_transforms(config['transforms']['test'])
 
     # Load datasets
     print("\nLoading train and val datasets...", flush=True)
@@ -148,7 +153,7 @@ def main():
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
-        collate_fn=collate_fn, 
+        collate_fn=HelperUtils.collate_fn, 
         shuffle=True,
         num_workers=4,
         pin_memory=True
@@ -157,7 +162,7 @@ def main():
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size, 
-        collate_fn=collate_fn, 
+        collate_fn=HelperUtils.collate_fn, 
         shuffle=False,
         num_workers=4,
         pin_memory=True
@@ -221,7 +226,7 @@ def main():
 
     # Log model configuration before training starts
     print("\nLogging model configuration...", flush=True)
-    log_model_config(
+    helper.log_model_config(
         model=model,
         base_model=config['model']['dinov2_version'],
         dataset=full_dataset,
@@ -282,7 +287,7 @@ def main():
                 outputs = torch.clamp(outputs, min=-10, max=10)
                 
                 if batch_idx == 0:
-                    check_loss_saturation(outputs, labels)
+                    HelperUtils.check_loss_saturation(outputs, labels)
                 
                 loss = criterion(outputs, labels)
                 
@@ -451,7 +456,7 @@ def main():
     )
     
     # Update model configuration with final metrics
-    log_model_config(
+    helper.log_model_config(
         model=model,
         base_model=config['model']['dinov2_version'],
         dataset=full_dataset,
@@ -476,7 +481,7 @@ def main():
 
     # After training is complete, run inference and log metrics
     print("\nRunning final inference and logging metrics...", flush=True)
-    test_metrics = run_inference_and_log_metrics(
+    test_metrics = helper.run_inference_and_log_metrics(
         model=model,
         test_dataset=test_dataset,
         device=device,

@@ -40,7 +40,7 @@ nvidia-smi
 # pip install -r requirements.txt
 
 # Run training with single MIG slice
-python training/train_model.py
+python src/training/train_model.py
 
 # Run training with distributed training across MIG slices
 # srun python -m torch.distributed.launch --nproc_per_node=3 training/train_model.py
