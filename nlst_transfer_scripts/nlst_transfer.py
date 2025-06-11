@@ -244,10 +244,10 @@ if __name__ == "__main__":
     # Get base PIDs based on data type
     if data_type == 'train':
         pids = get_train_pids()
-        default_dest_dir = 'nlst_train_data'
+        default_dest_dir = 'data/nlst/train'
     elif data_type == 'test':
         pids = get_test_pids()
-        default_dest_dir = 'nlst_test_data'
+        default_dest_dir = 'data/nlst/test'
     else:
         logger.error("Invalid data type. Please specify 'train' or 'test'.")
         sys.exit(1)

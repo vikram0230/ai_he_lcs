@@ -109,14 +109,6 @@ def run_attention_visualization(model: DinoVisionTransformerCancerPredictor, tes
     print("- slice_attention.png")
     print("- reconstruction_attention.png")
 
-def run_inference(model, test_dataset, device, mlflow_run, helper):
-    """Run inference on the test dataset."""
-    metrics = helper.run_inference_and_log_metrics(model, test_dataset, device, mlflow_run, logging=True)
-    
-    print("\nInference complete!")
-    print("\nTest Metrics Summary:")
-    print(f"Accuracy: {metrics['accuracy']:.4f}")
-    print(f"AUC-ROC: {metrics['auc']:.4f}")
 
 def main():
     # Parse command line arguments
@@ -152,7 +144,7 @@ def main():
             if args.visualize_attention:
                 run_attention_visualization(model, test_dataset, device)
             else:
-                run_inference(model, test_dataset, device, mlflow.active_run(), helper)
+                helper.run_inference_and_log_metrics(model, test_dataset, device, mlflow.active_run(), logging=False)
                 
         except Exception as e:
             print(f"Error during inference: {e}")

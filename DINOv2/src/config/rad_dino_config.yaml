@@ -19,8 +19,8 @@ data:
 # Model Parameters
 model:
   type: 'rad_dino'  # Options: ['dinov2', 'rad_dino']
-  dinov2_version: 'vits14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
-  name: 'DinoVisionTransformerCancerPredictor'  # Will be set based on model.type in the code
+  dinov2_version: 'vitb14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
+  name: 'RadDinoClassifier'  # Will be set based on model.type in the code
   transformer:
     num_layers: 2
     nhead: 8
@@ -88,4 +88,4 @@ seed: 42
 # MLflow Configuration
 mlflow:
   experiment_name: 'DINOv2 Cancer Prediction'
-  model_name: 'DinoVisionTransformerCancerPredictor'  # Will be set based on model.type in the code 
+  model_name: 'RadDinoClassifier'  # Will be set based on model.type in the code 

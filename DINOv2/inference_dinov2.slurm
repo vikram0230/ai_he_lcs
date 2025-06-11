@@ -28,7 +28,7 @@ nvidia-smi
 pip install -r requirements.txt
 
 # Run the inference script
-python src/training/inference.py
+python src/evaluation/inference.py --config src/config/rad_dino_config.yaml --run_id b87451d708844b68983da87dedd5602e
 
 # Print completion message
 echo "Job finished at $(date)" 

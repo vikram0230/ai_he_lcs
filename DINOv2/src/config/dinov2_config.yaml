@@ -1,0 +1,91 @@
+# Training Configuration
+
+# Data Parameters
+data:
+  train_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/DINOv2/nlst_train_data'
+  test_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/DINOv2/nlst_test_data'
+  labels_file: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/DINOv2/nlst_actual.csv'
+  train_patient_scan_count: 1000
+  test_patient_scan_count: 200
+  check_slice_thickness: false
+  train_val_split: 0.8
+  use_clinical_features: false  # Flag to control clinical features usage
+  clinical_features:
+    enabled: false
+    file_path: ''  # Path to clinical features CSV
+    feature_dim: 0  # Will be set based on actual features
+    features: []  # List of clinical features to use
+
+# Model Parameters
+model:
+  type: 'dinov2'  # Options: ['dinov2', 'rad_dino']
+  dinov2_version: 'vits14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
+  name: 'DinoVisionTransformerCancerPredictor'  # Will be set based on model.type in the code
+  transformer:
+    num_layers: 2
+    nhead: 8
+    dim_feedforward: 1024
+    dropout: 0.1
+  predictor:
+    layers: [256, 128, 1]
+    dropout: 0.1
+  unfreeze_last_layers: false  # Whether to unfreeze last few layers of DINOv2
+  unfreeze_layers: [9, 10, 11]  # Which layers to unfreeze if unfreeze_last_layers is true
+
+# Training Parameters
+training:
+  batch_size: 1
+  num_epochs: 50
+  learning_rate: 0.0001
+  early_stopping:
+    patience: 10
+  optimizer:
+    name: 'Adam'
+    weight_decay: 0.01  # Increased for better regularization
+  scheduler:
+    name: 'ReduceLROnPlateau'
+    # name: 'CosineAnnealingWarmupRestarts'
+    patience: 2
+    factor: 0.5
+    min_lr: 0.0000001
+    warmup_epochs: 5  # Number of epochs for warmup
+  loss:
+    name: 'BCEWithLogitsLoss'
+  gradient_clipping:
+    max_norm: 1.0
+  # New training improvements
+  mixup_alpha: 0.2  # Alpha parameter for mixup augmentation
+  cutmix_alpha: 1.0  # Alpha parameter for cutmix augmentation
+  curriculum_levels: [0.3, 0.6, 1.0]  # Difficulty levels for curriculum learning
+  curriculum_transitions: [10, 20]  # Epochs to transition between difficulty levels
+
+# Data Augmentation
+transforms:
+  train:
+    - name: 'Resize'
+      size: [224, 224]
+    - name: 'RandomHorizontalFlip'
+    - name: 'RandomRotation'
+      degrees: 10
+    - name: 'ColorJitter'
+      brightness: 0.1
+      contrast: 0.1
+    - name: 'ToTensor'
+    - name: 'Normalize'
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+  test:
+    - name: 'Resize'
+      size: [224, 224]
+    - name: 'ToTensor'
+    - name: 'Normalize'
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+# Random Seed
+seed: 42
+
+# MLflow Configuration
+mlflow:
+  experiment_name: 'DINOv2 Cancer Prediction'
+  model_name: 'DinoVisionTransformerCancerPredictor'  # Will be set based on model.type in the code 

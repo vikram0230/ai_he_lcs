@@ -1,5 +1,6 @@
 import os
 import argparse
+from random import random
 from matplotlib import pyplot as plt
 import mlflow
 import numpy as np
@@ -8,9 +9,10 @@ import torchvision.transforms as transforms
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 import torch
 from torch import nn, optim
-from tqdm import tqdm
 import seaborn as sns
 from torch.utils.data import DataLoader
+import datetime
+import yaml
 
 class HelperUtils:
     def __init__(self, config=None):
@@ -165,6 +167,46 @@ class HelperUtils:
                 ))
         return transforms.Compose(transform_list)
 
+    def resume_training(self, model, optimizer, checkpoint_path):
+        """Resume training from a checkpoint.
+        
+        Args:
+            model: The model to load the checkpoint into
+            optimizer: The optimizer to load the checkpoint into
+            checkpoint_path: Path to the checkpoint file
+            
+        Returns:
+            tuple: (start_epoch, best_loss)
+        """
+        if not os.path.exists(checkpoint_path):
+            print(f"Warning: Checkpoint file {checkpoint_path} not found. Starting from epoch 0.")
+            return 0, float('inf')
+            
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        # Load model state
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Load optimizer state
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Get training state
+        start_epoch = checkpoint['epoch']
+        best_loss = checkpoint['loss']
+        
+        print(f"Resumed training from epoch {start_epoch} with loss {best_loss:.4f}")
+        
+        # Log resume information to MLflow
+        mlflow.log_params({
+            'resumed_from_checkpoint': True,
+            'checkpoint_path': checkpoint_path,
+            'resume_epoch': start_epoch,
+            'resume_loss': best_loss
+        })
+        
+        return start_epoch, best_loss
+
     def save_checkpoint(self, model, optimizer, epoch, loss, path):
         """Save model checkpoint with training state."""
         checkpoint = {
@@ -212,7 +254,7 @@ class HelperUtils:
         return experiment_id
 
     def log_model_config(self, model, base_model, dataset, optimizer, scheduler, criterion, 
-                        num_epochs, training_duration, early_stopping_patience, batch_size, 
+                        num_epochs, early_stopping_patience, batch_size, 
                         check_slice_thickness=False):
         """Log model configuration to MLflow."""
         try:
@@ -237,7 +279,6 @@ class HelperUtils:
                 'trainable_parameters': trainable_params,
                 'frozen_parameters': total_params - trainable_params,
                 'num_epochs': num_epochs,
-                'training_duration': training_duration,
                 'early_stopping_patience': early_stopping_patience,
                 'batch_size': batch_size,
                 'check_slice_thickness': check_slice_thickness,
@@ -623,184 +664,204 @@ class HelperUtils:
 #     return total_loss / len(val_loader), metrics
 
 
-# def retrain_model(run_id, model, num_epochs, learning_rate, patience, dataset, device, start_epoch=0):
-#     """Retrain a loaded model with new parameters."""
-#     # Move model to device
-#     model = model.to(device)
-    
-#     # Setup optimizer and scheduler
-#     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-#     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5, min_lr=1e-6)
-    
-#     # Setup loss function
-#     criterion = nn.BCEWithLogitsLoss()
-    
-#     # Setup dataloader
-#     dataloader = DataLoader(dataset, batch_size=4, collate_fn=collate_fn, shuffle=True)
-    
-#     # Training loop
-#     best_loss = float('inf')
-#     patience_counter = 0
-#     scaler = torch.cuda.amp.GradScaler()
-    
-#     # Start MLflow run for retraining
-#     with mlflow.start_run(run_name=f"retrain_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"):
-#         # Log retraining parameters
-#         mlflow.log_params({
-#             'retrain_epochs': num_epochs,
-#             'retrain_learning_rate': learning_rate,
-#             'retrain_patience': patience,
-#             'original_run_id': run_id,
-#             'start_epoch': start_epoch
-#         })
+    def retrain_model(self, run_id, model, num_epochs, learning_rate, patience, dataset, device, start_epoch=0):
+        """Retrain a loaded model with new parameters."""
+        # Move model to device
+        model = model.to(device)
         
-#         start_time = datetime.datetime.now()
+        # Setup optimizer and scheduler
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5, min_lr=1e-6)
         
-#         for epoch in range(start_epoch, start_epoch + num_epochs):
-#             model.train()
-#             total_loss = 0
+        # Setup loss function
+        criterion = nn.BCEWithLogitsLoss()
+        
+        # Setup dataloader
+        dataloader = DataLoader(dataset, batch_size=4, collate_fn=self.collate_fn, shuffle=True)
+        
+        # Training loop
+        best_loss = float('inf')
+        patience_counter = 0
+        scaler = torch.cuda.amp.GradScaler()
+        
+        # Start MLflow run for retraining
+        with mlflow.start_run(run_name=f"retrain_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+            # Log retraining parameters
+            mlflow.log_params({
+                'retrain_epochs': num_epochs,
+                'retrain_learning_rate': learning_rate,
+                'retrain_patience': patience,
+                'original_run_id': run_id,
+                'start_epoch': start_epoch
+            })
             
-#             print(f"\nStarting Epoch {epoch+1}/{start_epoch + num_epochs}", flush=True)
-#             print("Training phase:", flush=True)
+            start_time = datetime.datetime.now()
             
-#             for batch_idx, batch in enumerate(dataloader):
-#                 try:
-#                     inputs = batch['images'].to(device)
-#                     positions = batch['positions'].to(device)
-#                     labels = batch['labels'].float().to(device)
-#                     attention_masks = batch['attention_mask'].to(device)
-                    
-#                     optimizer.zero_grad()
-                    
-#                     with torch.cuda.amp.autocast():
-#                         outputs = model(inputs, positions, attention_masks)
-#                         # Add gradient clipping to prevent extreme values
-#                         outputs = torch.clamp(outputs, min=-10, max=10)
-#                         print(f'Outputs: {outputs}', flush=True)
-#                         # Check for saturation
-#                         if batch_idx == 0:  # Check first batch of each epoch
-#                             check_loss_saturation(outputs, labels)
-#                         loss = criterion(outputs, labels)
+            for epoch in range(start_epoch, start_epoch + num_epochs):
+                model.train()
+                total_loss = 0
+                
+                print(f"\nStarting Epoch {epoch+1}/{start_epoch + num_epochs}", flush=True)
+                print("Training phase:", flush=True)
+                
+                for batch_idx, batch in enumerate(dataloader):
+                    try:
+                        inputs = batch['images'].to(device)
+                        positions = batch['positions'].to(device)
+                        labels = batch['labels'].float().to(device)
+                        attention_masks = batch['attention_mask'].to(device)
                         
-#                         # Check for NaN loss
-#                         if torch.isnan(loss):
-#                             print(f"Warning: NaN loss detected in batch {batch_idx}", flush=True)
-#                             print(f"Outputs range: [{outputs.min().item():.2f}, {outputs.max().item():.2f}]", flush=True)
-#                             print(f"Labels range: [{labels.min().item():.2f}, {labels.max().item():.2f}]", flush=True)
-#                             # Skip this batch
-#                             continue
-                    
-#                     # Add gradient clipping
-#                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    
-#                     scaler.scale(loss).backward()
-#                     scaler.step(optimizer)
-#                     scaler.update()
-                    
-#                     batch_loss = loss.item()
-#                     if not np.isnan(batch_loss):  # Only add non-NaN losses
-#                         total_loss += batch_loss
-                    
-#                     # Log batch metrics
-#                     if not np.isnan(batch_loss):
-#                         mlflow.log_metric('retrain_batch_loss', batch_loss, 
-#                                         step=epoch * len(dataloader) + batch_idx)
-                    
-#                 except RuntimeError as e:
-#                     print(f"Error in batch {batch_idx}: {e}", flush=True)
-#                     if "out of memory" in str(e):
-#                         print(f"OOM in batch {batch_idx}. Exiting program...", flush=True)
-#                         import sys
-#                         sys.exit()
-#                     else:
-#                         raise e
+                        optimizer.zero_grad()
+                        
+                        with torch.cuda.amp.autocast():
+                            outputs = model(inputs, positions, attention_masks)
+                            # Add gradient clipping to prevent extreme values
+                            outputs = torch.clamp(outputs, min=-10, max=10)
+                            print(f'Outputs: {outputs}', flush=True)
+                            # Check for saturation
+                            if batch_idx == 0:  # Check first batch of each epoch
+                                self.check_loss_saturation(outputs, labels)
+                            loss = criterion(outputs, labels)
+                            
+                            # Check for NaN loss
+                            if torch.isnan(loss):
+                                print(f"Warning: NaN loss detected in batch {batch_idx}", flush=True)
+                                print(f"Outputs range: [{outputs.min().item():.2f}, {outputs.max().item():.2f}]", flush=True)
+                                print(f"Labels range: [{labels.min().item():.2f}, {labels.max().item():.2f}]", flush=True)
+                                # Skip this batch
+                                continue
+                        
+                        # Add gradient clipping
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                        
+                        scaler.scale(loss).backward()
+                        scaler.step(optimizer)
+                        scaler.update()
+                        
+                        batch_loss = loss.item()
+                        if not np.isnan(batch_loss):  # Only add non-NaN losses
+                            total_loss += batch_loss
+                        
+                        # Log batch metrics
+                        if not np.isnan(batch_loss):
+                            mlflow.log_metric('retrain_batch_loss', batch_loss, 
+                                            step=epoch * len(dataloader) + batch_idx)
+                        
+                    except RuntimeError as e:
+                        print(f"Error in batch {batch_idx}: {e}", flush=True)
+                        if "out of memory" in str(e):
+                            print(f"OOM in batch {batch_idx}. Exiting program...", flush=True)
+                            import sys
+                            sys.exit()
+                        else:
+                            raise e
+                
+                avg_loss = total_loss / len(dataloader)
+                
+                # Log epoch metrics
+                mlflow.log_metrics({
+                    'retrain_epoch_loss': avg_loss,
+                    'retrain_learning_rate': optimizer.param_groups[0]['lr'],
+                    'epoch': epoch + 1
+                }, step=epoch)
+                
+                print(f"\nRetraining Epoch {epoch+1}/{start_epoch + num_epochs} Summary:", flush=True)
+                print(f"Average Loss: {avg_loss:.4f}", flush=True)
+                
+                scheduler.step(avg_loss)
+                
+                # Save best model
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    patience_counter = 0
+                    mlflow.pytorch.log_model(
+                        model,
+                        "retrain_best_model",
+                        registered_model_name="DinoVisionTransformerCancerPredictor"
+                    )
+                else:
+                    patience_counter += 1
+                
+                if patience_counter >= patience:
+                    print("\nEarly stopping triggered!", flush=True)
+                    break
             
-#             avg_loss = total_loss / len(dataloader)
+            end_time = datetime.datetime.now()
+            training_duration = str(end_time - start_time)
             
-#             # Log epoch metrics
-#             mlflow.log_metrics({
-#                 'retrain_epoch_loss': avg_loss,
-#                 'retrain_learning_rate': optimizer.param_groups[0]['lr'],
-#                 'epoch': epoch + 1
-#             }, step=epoch)
+            # Log final model
+            mlflow.pytorch.log_model(
+                model,
+                "retrain_final_model",
+                registered_model_name="DinoVisionTransformerCancerPredictor"
+            )
             
-#             print(f"\nRetraining Epoch {epoch+1}/{start_epoch + num_epochs} Summary:", flush=True)
-#             print(f"Average Loss: {avg_loss:.4f}", flush=True)
+            # Log final metrics
+            mlflow.log_metrics({
+                'retrain_final_loss': avg_loss,
+                'retrain_duration': training_duration,
+                'final_epoch': epoch + 1
+            })
             
-#             scheduler.step(avg_loss)
-            
-#             # Save best model
-#             if avg_loss < best_loss:
-#                 best_loss = avg_loss
-#                 patience_counter = 0
-#                 mlflow.pytorch.log_model(
-#                     model,
-#                     "retrain_best_model",
-#                     registered_model_name="DinoVisionTransformerCancerPredictor"
-#                 )
-#             else:
-#                 patience_counter += 1
-            
-#             if patience_counter >= patience:
-#                 print("\nEarly stopping triggered!", flush=True)
-#                 break
+            return model, avg_loss, training_duration, epoch + 1
         
-#         end_time = datetime.datetime.now()
-#         training_duration = str(end_time - start_time)
-        
-#         # Log final model
-#         mlflow.pytorch.log_model(
-#             model,
-#             "retrain_final_model",
-#             registered_model_name="DinoVisionTransformerCancerPredictor"
-#         )
-        
-#         # Log final metrics
-#         mlflow.log_metrics({
-#             'retrain_final_loss': avg_loss,
-#             'retrain_duration': training_duration,
-#             'final_epoch': epoch + 1
-#         })
-        
-#         return model, avg_loss, training_duration, epoch + 1
+    @staticmethod
+    def set_seed(self, seed):
+        """Set random seed for reproducibility."""
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-
-def parse_args(mode='train'):
-    """
-    Parse command line arguments for training or inference.
-    
-    Args:
-        mode (str): Either 'train' or 'inference' to determine which arguments to parse
+    @staticmethod
+    def get_last_epoch(self, run_id):
+        """Get the last epoch number from the MLflow run."""
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
         
-    Returns:
-        argparse.Namespace: Parsed arguments
-    """
-    parser = argparse.ArgumentParser(description='DINOv2 Medical Imaging Project')
-    
-    # Common arguments
-    parser.add_argument('--config', type=str, default='src/config/config.yaml',
-                      help='Path to the configuration file (default: src/config/config.yaml)')
-    
-    if mode == 'train':
-        # Training specific arguments
-        parser.add_argument('--resume', action='store_true',
-                          help='Resume training from checkpoint')
-        parser.add_argument('--checkpoint', type=str,
-                          help='Path to checkpoint file for resuming training')
-        parser.add_argument('--debug', action='store_true',
-                          help='Run in debug mode with smaller dataset')
-    
-    elif mode == 'inference':
-        # Inference specific arguments
-        parser.add_argument('--run_id', type=str, required=True,
-                          help='MLflow run ID to load the model from')
-        parser.add_argument('--visualize_attention', action='store_true',
-                          help='Whether to visualize attention maps')
-        parser.add_argument('--output_dir', type=str, default='outputs',
-                          help='Directory to save inference outputs')
-        parser.add_argument('--batch_size', type=int, default=1,
-                          help='Batch size for inference')
-    
-    return parser.parse_args()
+        # Get the final epoch from metrics
+        metrics = run.data.metrics
+        if 'final_epoch' in metrics:
+            return int(metrics['final_epoch'])
+        elif 'epoch' in metrics:
+            return int(metrics['epoch'])
+        else:
+            print("Warning: Could not find epoch information in MLflow run. Starting from epoch 0.")
+            return 0
 
+    @staticmethod
+    def get_training_params(self, run_id):
+        """Get training parameters from the original MLflow run."""
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
+        params = run.data.params
+        
+        # Extract relevant parameters
+        training_params = {
+            'batch_size': int(params.get('batch_size', 10)),
+            'learning_rate': float(params.get('learning_rate', 0.0001)),
+            'num_epochs': int(params.get('num_epochs', 100)),
+            'patience': int(params.get('early_stopping_patience', 5)),
+            'train_size': float(params.get('train_split', 0.8)),
+            'seed': int(params.get('seed', 42)),
+            'check_slice_thickness': params.get('check_slice_thickness', 'false').lower() == 'true'
+        }
+        
+        return training_params
 
+    @staticmethod
+    def get_model_config(self, run_id):
+        """Get model configuration from the original MLflow run."""
+        client = mlflow.tracking.MlflowClient()
+        run = client.get_run(run_id)
+        
+        # Get the config file from artifacts
+        config_path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="config/config.yaml")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        return config

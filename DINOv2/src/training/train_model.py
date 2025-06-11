@@ -234,7 +234,6 @@ def main():
         scheduler=scheduler,
         criterion=criterion,
         num_epochs=num_epochs,
-        training_duration="0:00:00",
         early_stopping_patience=patience,
         batch_size=batch_size,
         check_slice_thickness=config['data']['check_slice_thickness']
@@ -464,7 +463,6 @@ def main():
         scheduler=scheduler,
         criterion=criterion,
         num_epochs=num_epochs,
-        training_duration=training_duration,
         early_stopping_patience=patience,
         batch_size=batch_size
     )
