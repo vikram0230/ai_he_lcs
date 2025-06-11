@@ -1,0 +1,10 @@
+Bootstrap: docker
+From: centos:7
+
+%post
+	yum install wget -y
+	wget -P NBIA-Data-Retriever https://cbiit-download.nci.nih.gov/nbia/releases/ForTCIA/NBIADataRetriever_4.4.1/NBIADataRetriever-4.4.1.x86_64.rpm
+	yum -y localinstall NBIA-Data-Retriever/NBIADataRetriever-4.4.1.x86_64.rpm
+
+%runscript
+	/opt/NBIADataRetriever/NBIADataRetriever "$@"

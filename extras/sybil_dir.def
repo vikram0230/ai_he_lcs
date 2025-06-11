@@ -1,0 +1,5 @@
+Bootstrap: localimage
+From: /projects/com_shared/azakka2/sybil/sybil_latest.sif
+
+%runscript
+	python main.py "$@"
