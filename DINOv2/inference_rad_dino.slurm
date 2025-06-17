@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=dinov2_inf                          # Job name
-#SBATCH --output=logs/slurm_logs/dinov2_inf_%j.out     # Name of output file (%j expands to jobId)
-#SBATCH --error=logs/slurm_logs/dinov2_inf_%j.out      # Name of error file (%j expands to jobId)
+#SBATCH --job-name=rad_dino_inf                          # Job name
+#SBATCH --output=logs/slurm_logs/rad_dino_inf_%j.out     # Name of output file (%j expands to jobId)
+#SBATCH --error=logs/slurm_logs/rad_dino_inf_%j.out      # Name of error file (%j expands to jobId)
 #SBATCH --time=24:00:00                                # Run time (hh:mm:ss) - 24 hours should be enough for inference
 #SBATCH --nodes=1                                      # Number of nodes
 #SBATCH --ntasks=1                                     # Number of tasks
@@ -28,7 +28,7 @@ nvidia-smi
 pip install -r requirements.txt
 
 # Run the inference script
-python src/evaluation/inference.py --config src/config/dinov2_config.yaml --run_id e4e75c936382449696c5b6dc2efa4cba
+python src/evaluation/inference.py --config src/config/rad_dino_config.yaml --run_id e4e75c936382449696c5b6dc2efa4cba
 
 # Print completion message
 echo "Job finished at $(date)" 

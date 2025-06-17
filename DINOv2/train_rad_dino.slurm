@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=dinov2_train    # Job name
-#SBATCH --output=logs/slurm_logs/dinov2_train_%j.out     # Name of output file (%j expands to jobId)
-#SBATCH --error=logs/slurm_logs/dinov2_train_%j.out      # Name of error file (%j expands to jobId)
+#SBATCH --job-name=rad_dino_train    # Job name
+#SBATCH --output=logs/slurm_logs/rad_dino_train_%j.out     # Name of output file (%j expands to jobId)
+#SBATCH --error=logs/slurm_logs/rad_dino_train_%j.out      # Name of error file (%j expands to jobId)
 #SBATCH --time=100:00:00            # Run time (hh:mm:ss) - 100 hours
 #SBATCH --nodes=1                  # Number of nodes
 #SBATCH --ntasks=1                 # Number of tasks (single task for single MIG slice)
@@ -40,7 +40,7 @@ nvidia-smi
 # pip install -r requirements.txt
 
 # Run training with single MIG slice
-python src/training/train_model.py --config src/config/dinov2_config.yaml
+python src/training/train_model.py --config src/config/rad_dino_config.yaml
 
 # Run training with distributed training across MIG slices
 # srun python -m torch.distributed.launch --nproc_per_node=3 training/train_model.py
