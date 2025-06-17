@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+
 class AnatomicalPositionEncoding(nn.Module):
     def __init__(self, feature_dim):
         super().__init__()

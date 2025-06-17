@@ -12,7 +12,7 @@ import random
 import yaml
 import os
 
-from src.utils.helper_functions import HelperUtils
+from src.utils.helpers import HelperUtils
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -269,7 +269,7 @@ def main():
                 inputs = batch['images'].to(device)
                 positions = batch['positions'].to(device)
                 labels = batch['labels'].float().to(device)
-                attention_masks = batch['attention_mask'].to(device)
+                # attention_masks = batch['attention_mask'].to(device)
                 
                 clinical_features = batch.get('clinical_features')
                 if clinical_features is not None:
@@ -279,9 +279,9 @@ def main():
                 
                 # Forward pass with or without clinical features
                 if clinical_features is not None:
-                    outputs = model(inputs, positions, attention_masks, clinical_features)
+                    outputs = model(inputs, positions, clinical_features=clinical_features)
                 else:
-                    outputs = model(inputs, positions, attention_masks)
+                    outputs = model(inputs, positions)
                 
                 outputs = torch.clamp(outputs, min=-10, max=10)
                 
@@ -351,7 +351,7 @@ def main():
                     inputs = batch['images'].to(device)
                     positions = batch['positions'].to(device)
                     labels = batch['labels'].float().to(device)
-                    attention_masks = batch['attention_mask'].to(device)
+                    # attention_masks = batch['attention_mask'].to(device)
                     
                     clinical_features = batch.get('clinical_features')
                     if clinical_features is not None:
@@ -359,9 +359,9 @@ def main():
                     
                     # Forward pass with or without clinical features
                     if clinical_features is not None:
-                        outputs = model(inputs, positions, attention_masks, clinical_features)
+                        outputs = model(inputs, positions, clinical_features=clinical_features)
                     else:
-                        outputs = model(inputs, positions, attention_masks)
+                        outputs = model(inputs, positions)
                     
                     outputs = torch.clamp(outputs, min=-10, max=10)
                     loss = criterion(outputs, labels)
@@ -386,7 +386,7 @@ def main():
                         print_memory_stats("After validation batch")
                     
                     # Clear memory
-                    del inputs, positions, labels, attention_masks, outputs, loss
+                    del inputs, positions, labels, outputs, loss
                     torch.cuda.empty_cache()
                     
                 except RuntimeError as e:

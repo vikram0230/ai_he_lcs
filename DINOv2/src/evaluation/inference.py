@@ -12,7 +12,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models.dinov2_classifier import DinoVisionTransformerCancerPredictor
-from src.utils.helper_functions import HelperUtils
+from utils.helpers import HelperUtils
 from src.data.dataset_loader import PatientDicomDataset
 
 def load_config(config_path):
@@ -20,48 +20,64 @@ def load_config(config_path):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def visualize_dinov2_attention(attention_maps, save_path='dinov2_attention.png'):
-    """Visualize attention maps from DINOv2 transformer layers."""
+def visualize_dinov2_attention(attention_maps, input_image=None, save_path='dinov2_attention.png'):
+    """Visualize attention maps from DINOv2 transformer layers without averaging heads."""
     num_layers = len(attention_maps)
-    fig, axes = plt.subplots(1, num_layers, figsize=(5*num_layers, 5))
-    if num_layers == 1:
-        axes = [axes]
+    num_heads = attention_maps[0].shape[1]  # Number of attention heads
     
-    for i, attn in enumerate(attention_maps):
-        # Average attention across heads
-        attn = attn.mean(dim=1)  # Average across attention heads
-        # Reshape to 2D grid (assuming square input)
+    # Calculate grid dimensions
+    grid_cols = num_heads + 1  # +1 for input image
+    grid_rows = num_layers
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(grid_rows, grid_cols, figsize=(5*grid_cols, 5*grid_rows))
+    if num_layers == 1:
+        axes = axes.reshape(1, -1)
+    
+    for layer_idx, attn in enumerate(attention_maps):
+        # Get grid size for this layer
         grid_size = int(np.sqrt(attn.shape[-1]))
-        attn_grid = attn[0].reshape(grid_size, grid_size)  # Take first batch
         
-        sns.heatmap(attn_grid, ax=axes[i], cmap='viridis')
-        axes[i].set_title(f'Layer {i+1}')
-        axes[i].axis('off')
+        # Plot input image in first column
+        if input_image is not None:
+            axes[layer_idx, 0].imshow(input_image[0].cpu().numpy().transpose(1, 2, 0))
+            axes[layer_idx, 0].set_title('Input Image')
+            axes[layer_idx, 0].axis('off')
+        
+        # Plot each attention head
+        for head_idx in range(num_heads):
+            attn_grid = attn[0, head_idx].reshape(grid_size, grid_size)
+            sns.heatmap(attn_grid, ax=axes[layer_idx, head_idx + 1], cmap='viridis')
+            axes[layer_idx, head_idx + 1].set_title(f'Head {head_idx + 1}')
+            axes[layer_idx, head_idx + 1].axis('off')
     
     plt.tight_layout()
-    plt.savefig(save_path)
+    plt.savefig(save_path, bbox_inches='tight', dpi=300)
     plt.close()
 
 def visualize_slice_attention(attention_maps, save_path='slice_attention.png'):
-    """Visualize attention maps from slice processor."""
+    """Visualize attention maps from slice processor without averaging heads."""
     num_layers = len(attention_maps)
-    fig, axes = plt.subplots(1, num_layers, figsize=(5*num_layers, 5))
-    if num_layers == 1:
-        axes = [axes]
+    num_heads = attention_maps[0].shape[1]  # Number of attention heads
     
-    for i, attn in enumerate(attention_maps):
-        # Average attention across heads
-        attn = attn.mean(dim=1)  # Average across attention heads
-        # Take first batch and first reconstruction
-        attn_matrix = attn[0, 0]  # [num_slices, num_slices]
-        
-        sns.heatmap(attn_matrix, ax=axes[i], cmap='viridis')
-        axes[i].set_title(f'Slice Layer {i+1}')
-        axes[i].set_xlabel('Slice Index')
-        axes[i].set_ylabel('Slice Index')
+    # Create figure with subplots
+    fig, axes = plt.subplots(num_layers, num_heads, figsize=(5*num_heads, 5*num_layers))
+    if num_layers == 1:
+        axes = axes.reshape(1, -1)
+    
+    for layer_idx, attn in enumerate(attention_maps):
+        # Plot each attention head
+        for head_idx in range(num_heads):
+            # Take first batch and first reconstruction
+            attn_matrix = attn[0, head_idx]  # [num_slices, num_slices]
+            
+            sns.heatmap(attn_matrix, ax=axes[layer_idx, head_idx], cmap='viridis')
+            axes[layer_idx, head_idx].set_title(f'Layer {layer_idx + 1}, Head {head_idx + 1}')
+            axes[layer_idx, head_idx].set_xlabel('Slice Index')
+            axes[layer_idx, head_idx].set_ylabel('Slice Index')
     
     plt.tight_layout()
-    plt.savefig(save_path)
+    plt.savefig(save_path, bbox_inches='tight', dpi=300)
     plt.close()
 
 def visualize_reconstruction_attention(attention_weights, save_path='reconstruction_attention.png'):
@@ -92,7 +108,7 @@ def run_attention_visualization(model: DinoVisionTransformerCancerPredictor, tes
     
     # Visualize attention maps
     print("\nVisualizing attention maps...")
-    visualize_dinov2_attention(attention_maps['attention'])
+    visualize_dinov2_attention(attention_maps['attention'], patient_tensor)
     visualize_slice_attention(attention_maps['slice_attention'])
     visualize_reconstruction_attention(attention_maps['reconstruction_attention'])
     
@@ -144,7 +160,7 @@ def main():
             if args.visualize_attention:
                 run_attention_visualization(model, test_dataset, device)
             else:
-                helper.run_inference_and_log_metrics(model, test_dataset, device, mlflow.active_run(), logging=False)
+                helper.run_inference_and_log_metrics(model, test_dataset, device, mlflow.active_run(), logging=True)
                 
         except Exception as e:
             print(f"Error during inference: {e}")

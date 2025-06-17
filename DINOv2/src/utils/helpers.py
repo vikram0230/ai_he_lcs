@@ -39,12 +39,7 @@ class HelperUtils:
         
         if mode == 'train':
             # Training specific arguments
-            parser.add_argument('--resume', action='store_true',
-                              help='Resume training from checkpoint')
-            parser.add_argument('--checkpoint', type=str,
-                              help='Path to checkpoint file for resuming training')
-            parser.add_argument('--debug', action='store_true',
-                              help='Run in debug mode with smaller dataset')
+            pass
         
         elif mode == 'inference':
             # Inference specific arguments
@@ -52,10 +47,6 @@ class HelperUtils:
                               help='MLflow run ID to load the model from')
             parser.add_argument('--visualize_attention', action='store_true',
                               help='Whether to visualize attention maps')
-            parser.add_argument('--output_dir', type=str, default='outputs',
-                              help='Directory to save inference outputs')
-            parser.add_argument('--batch_size', type=int, default=1,
-                              help='Batch size for inference')
         
         return parser.parse_args()
 
@@ -87,10 +78,10 @@ class HelperUtils:
             print(f"Processing item: img shape {img.shape}, pos shape {pos.shape}", flush=True)
 
             # Create 2D attention mask
-            recon_mask = torch.zeros((max_reconstructions, max_slices))
+            # recon_mask = torch.zeros((max_reconstructions, max_slices))
             
-            # Set 1s for actual data positions
-            recon_mask[:img.size(0), :img.size(1)] = 1
+            # # Set 1s for actual data positions
+            # recon_mask[:img.size(0), :img.size(1)] = 1
             
             # Pad image and positions
             if img.size(0) < max_reconstructions or img.size(1) < max_slices:
@@ -112,13 +103,13 @@ class HelperUtils:
             # Verify shapes
             assert img.size(1) == pos.size(0), \
                 f"Position shape {pos.shape} doesn't match image slices {img.size(1)}"
-            assert recon_mask.size() == (max_reconstructions, max_slices), \
-                f"Mask shape {recon_mask.size()} doesn't match expected {(max_reconstructions, max_slices)}"
+            # assert recon_mask.size() == (max_reconstructions, max_slices), \
+            #     f"Mask shape {recon_mask.size()} doesn't match expected {(max_reconstructions, max_slices)}"
             
             images.append(img)
             positions.append(pos)
             labels.append(label)
-            attention_masks.append(recon_mask)
+            # attention_masks.append(recon_mask)
             
             if has_clinical_features:
                 clinical_features.append(clin_feat)
@@ -134,7 +125,7 @@ class HelperUtils:
             'images': torch.stack(images),           # [batch, max_recon, max_slices, C, H, W]
             'positions': torch.stack(positions),     # [batch, max_slices]
             'labels': torch.stack(labels),
-            'attention_mask': torch.stack(attention_masks)  # [batch, max_recon, max_slices]
+            # 'attention_mask': torch.stack(attention_masks)  # [batch, max_recon, max_slices]
         }
         
         if has_clinical_features:

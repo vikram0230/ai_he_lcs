@@ -9,7 +9,7 @@ import random
 from src.data.dataset_loader import PatientDicomDataset
 import mlflow
 import yaml
-from src.utils.helper_functions import HelperUtils
+from utils.helpers import HelperUtils
 
 
 def main():
