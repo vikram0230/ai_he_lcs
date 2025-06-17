@@ -6,6 +6,8 @@ import pandas as pd
 from PIL import Image
 import random
 from torch.utils.data import Dataset
+import torchio as tio
+from typing import List, Tuple
 
 class PatientDicomDataset(Dataset):
     def __init__(self, config, is_train=True, transform=None):
@@ -19,6 +21,11 @@ class PatientDicomDataset(Dataset):
         self.transform = transform
         self.check_slice_thickness = config['data']['check_slice_thickness']
         self.use_clinical_features = config['data'].get('use_clinical_features', False)
+        
+        # Resampling parameters
+        self.target_slice_thickness = config['data'].get('target_slice_thickness', 2.5)  # mm
+        self.target_num_slices = config['data'].get('target_num_slices', 200)
+        self.voxel_spacing = tuple(config['data']['voxel_spacing'])  # Convert list to tuple
         
         # Set data directory based on whether this is training or test
         self.root_dir = config['data']['train_data_dir'] if is_train else config['data']['test_data_dir']
@@ -202,6 +209,65 @@ class PatientDicomDataset(Dataset):
         
         return False
     
+    def _resample_reconstruction(self, dicom_files: List[str], recon_path: str) -> torch.Tensor:
+        """
+        Resample a reconstruction to have consistent slice thickness and number of slices.
+        
+        Args:
+            dicom_files: List of DICOM file paths
+            recon_path: Path to reconstruction directory
+            
+        Returns:
+            torch.Tensor: Resampled reconstruction with shape [num_slices, C, H, W]
+        """
+        # Create 3D volume from DICOM slices
+        slices = []
+        for dicom_file in dicom_files:
+            dicom = pydicom.dcmread(os.path.join(recon_path, dicom_file))
+            image = dicom.pixel_array
+            image = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
+            slices.append(image)
+        
+        # Stack slices into 3D volume
+        volume = np.stack(slices, axis=0)  # [Z, H, W]
+        
+        # Create TorchIO subject
+        subject = tio.Subject(
+            image=tio.ScalarImage(tensor=torch.from_numpy(volume).unsqueeze(0))  # Add channel dimension
+        )
+        
+        # Use voxel spacing from config
+        target_spacing = self.voxel_spacing  # (0.703125, 0.703125, 2.5)
+        
+        # Create resampling transform
+        resample = tio.transforms.Resample(
+            target=target_spacing,
+            image_interpolation='linear'
+        )
+        
+        # Apply resampling
+        resampled = resample(subject)
+        resampled_volume = resampled.image.data.squeeze(0)  # Remove channel dimension
+        
+        # If we have more slices than target, take evenly spaced slices
+        if resampled_volume.shape[0] > self.target_num_slices:
+            indices = np.linspace(0, resampled_volume.shape[0]-1, self.target_num_slices, dtype=int)
+            resampled_volume = resampled_volume[indices]
+        # If we have fewer slices, pad with zeros
+        elif resampled_volume.shape[0] < self.target_num_slices:
+            padding = torch.zeros(
+                (self.target_num_slices - resampled_volume.shape[0], 
+                 resampled_volume.shape[1], 
+                 resampled_volume.shape[2]),
+                dtype=resampled_volume.dtype
+            )
+            resampled_volume = torch.cat([resampled_volume, padding], dim=0)
+        
+        # Convert to RGB by repeating the channel
+        resampled_volume = resampled_volume.unsqueeze(1).repeat(1, 3, 1, 1)  # [Z, 3, H, W]
+        
+        return resampled_volume
+    
     def __len__(self):
         return len(self.scan_list)
     
@@ -221,26 +287,10 @@ class PatientDicomDataset(Dataset):
             
             # Get all DICOM files for this reconstruction and sort by slice number
             dicom_files = sorted([f for f in os.listdir(recon_path) if f.endswith('.dcm')],
-                               key=lambda x: int(x.split('-')[1].split('.')[0]))  # For files like '1-001.dcm'
+                               key=lambda x: int(x.split('-')[1].split('.')[0]))
             
-            reconstruction_images = []
-            
-            # Process all slices
-            for dicom_file in dicom_files:
-                dicom_path = os.path.join(recon_path, dicom_file)
-                dicom = pydicom.dcmread(dicom_path)
-                
-                # Convert DICOM to PIL Image
-                image = dicom.pixel_array
-                image = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
-                image = Image.fromarray(image).convert('RGB')
-                
-                if self.transform:
-                    image = self.transform(image)
-                
-                reconstruction_images.append(image)
-            
-            reconstruction_tensor = torch.stack(reconstruction_images)
+            # Resample the reconstruction
+            reconstruction_tensor = self._resample_reconstruction(dicom_files, recon_path)
             print(f"Single reconstruction tensor shape: {reconstruction_tensor.shape}")  # [num_slices, C, H, W]
             all_reconstructions.append(reconstruction_tensor)
         
@@ -251,9 +301,8 @@ class PatientDicomDataset(Dataset):
         patient_tensor = torch.stack(all_reconstructions)
         print(f"Final patient tensor shape: {patient_tensor.shape}")  # [num_reconstructions, num_slices, C, H, W]
         
-        # Create normalized slice positions based on slice numbers
-        num_slices = len(reconstruction_images)  # Use number of processed slices
-        slice_positions = torch.linspace(0, 1, num_slices, dtype=torch.float32)
+        # Create normalized slice positions based on target number of slices
+        slice_positions = torch.linspace(0, 1, self.target_num_slices, dtype=torch.float32)
         
         # Get label for this patient and study year
         patient_label = self.labels_df[

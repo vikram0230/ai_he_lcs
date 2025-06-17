@@ -1,15 +1,16 @@
-# Training Configuration
-
 # Data Parameters
 data:
-  train_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/DINOv2/nlst_train_data'
-  test_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/DINOv2/nlst_test_data'
-  labels_file: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/DINOv2/nlst_actual.csv'
+  train_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/data/nlst/train'
+  test_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/data/nlst/test'
+  labels_file: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/nlst_actual.csv'
   train_patient_scan_count: 1000
   test_patient_scan_count: 200
   check_slice_thickness: false
   train_val_split: 0.8
   use_clinical_features: false  # Flag to control clinical features usage
+  target_slice_thickness: 2.5  # mm
+  target_num_slices: 200
+  voxel_spacing: [0.703125, 0.703125, 2.5]  # [x, y, z] spacing in mm
   clinical_features:
     enabled: false
     file_path: ''  # Path to clinical features CSV
@@ -19,7 +20,7 @@ data:
 # Model Parameters
 model:
   type: 'dinov2'  # Options: ['dinov2', 'rad_dino']
-  dinov2_version: 'vits14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
+  dinov2_version: 'vitb14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
   name: 'DinoVisionTransformerCancerPredictor'  # Will be set based on model.type in the code
   transformer:
     num_layers: 2

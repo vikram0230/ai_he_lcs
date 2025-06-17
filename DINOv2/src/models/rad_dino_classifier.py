@@ -176,14 +176,14 @@ class RadDinoClassifier(nn.Module):
                     mask = mask.unsqueeze(1)  # [B, 1, S]
                     processed_slice_sequence = processed_slice_sequence * mask.unsqueeze(-1)
                 
-                # Pool features
+                # Pool features across slices to get a single feature vector per reconstruction
                 recon_feature = processed_slice_sequence.mean(dim=1)  # [B, feature_dim]
                 recon_features.append(recon_feature)
             
-            # Stack and apply reconstruction attention
+            # Stack reconstructions
             recon_features = torch.stack(recon_features, dim=1)  # [B, R, feature_dim]
             
-            # Apply reconstruction attention
+            # Apply reconstruction attention to get a single feature vector per scan
             if attention_mask is not None:
                 recon_mask = (attention_mask.sum(dim=-1) > 0).float()  # [B, R]
                 attention_weights = self.reconstruction_attention(recon_features)
@@ -192,12 +192,12 @@ class RadDinoClassifier(nn.Module):
             else:
                 attention_weights = self.reconstruction_attention(recon_features)
             
-            combined_features = torch.sum(attention_weights * recon_features, dim=[1,2])
-            final_features = combined_features
+            # Combine features to get a single feature vector per scan
+            final_features = torch.sum(attention_weights * recon_features, dim=1)  # [B, feature_dim]
         
         else:
             # Reshape features from [1, 1, 168, 384] to [168, 384]
-            final_features = features.squeeze(0).squeeze(0)  # Remove first two dimensions
+            final_features = features.squeeze(0).squeeze(0)
             
         # Process clinical features if enabled and provided
         if self.use_clinical_features and clinical_features is not None:
@@ -206,7 +206,10 @@ class RadDinoClassifier(nn.Module):
             final_features = torch.cat([final_features, clinical_embeddings], dim=1)
             
         print(f"final_features shape: {final_features.shape}", flush=True)
-        return self.predictor(final_features)
+        
+        # Get prediction for the entire scan
+        return self.predictor(final_features)  # [B, 1]
+
 
     def predict_probabilities(self, x):
         """
@@ -307,15 +310,31 @@ class RadDinoClassifier(nn.Module):
             # Reshape to batch all images together
             x_reshaped = x.view(B * R * S, C, H, W)
             
+            # Convert to PIL images for RAD-DINO processor
+            pil_images = []
+            for img in x_reshaped:
+                # Convert to numpy and transpose to (H, W, C)
+                img_np = img.cpu().numpy().transpose(1, 2, 0)
+                # Normalize to 0-255 range and convert to uint8
+                img_np = ((img_np - img_np.min()) / (img_np.max() - img_np.min()) * 255).astype(np.uint8)
+                pil_images.append(Image.fromarray(img_np))
+            
+            # Process through DINOv2 processor
+            inputs = self.processor(images=pil_images, return_tensors="pt").to(next(self.parameters()).device)
+            
             # Get attention maps from RAD-DINO transformer
             rad_dino_attention_maps = []
+            # First get the hidden states from the transformer
+            outputs = self.transformer(**inputs)
+            hidden_states = outputs.last_hidden_state
+            
             for layer in self.transformer.encoder.layer:
                 # Get attention weights from the layer
-                attention_output = layer.attention(x_reshaped)
+                attention_output = layer.attention(hidden_states)
                 rad_dino_attention_maps.append(attention_output.attn_weights)
             
             # Process through the model to get slice and reconstruction attention
-            features = self.transformer(x_reshaped).last_hidden_state
+            features = hidden_states
             features = features.view(B, R, S, -1)  # [B, R, S, feature_dim]
             
             # Get slice attention maps
