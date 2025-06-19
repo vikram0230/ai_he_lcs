@@ -27,12 +27,31 @@ Example:
 import os
 import pandas as pd
 import logging
+logging.getLogger('globus_sdk').setLevel(logging.WARNING)
+logging.getLogger('globus_sdk.auth').setLevel(logging.WARNING)
+logging.getLogger('globus_sdk.transfer').setLevel(logging.WARNING)
+logging.getLogger('globus_sdk.services').setLevel(logging.WARNING)
 import sys
 import argparse
 from dotenv import load_dotenv
 from globus_connect import GlobusConnect
 from globus_sdk import TransferAPIError
 from datetime import datetime
+
+# =====================
+# Static Path Variables
+# =====================
+PID_SPLIT_CSV = 'pid2split_sorted.csv'
+NLST_ACTUAL_CSV = 'nlst_actual.csv'
+ENV_PATH = "/home/vhari/dom_ameen_chi_link/vhari/.env"
+LOG_DIR = 'logs/nlst_transfer/'
+DEFAULT_TRAIN_DIR = 'data/nlst/train'
+DEFAULT_TEST_DIR = 'data/nlst/test'
+SOURCE_BASE_PATH = '/dom_ameen/common/NLST/manifest-NLST_allCT/NLST'
+DEST_BASE_PATH = '/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2'
+
+# Create log directory if it doesn't exist
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # Configure logging
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -55,7 +74,7 @@ def get_train_pids():
     Returns:
         list: List of PIDs in the training set
     """
-    pid_df = pd.read_csv('pid2split_sorted.csv')
+    pid_df = pd.read_csv(PID_SPLIT_CSV)
     train_pids = pid_df[pid_df['SPLIT'] == 'train']['PID'].tolist()
     logger.info(f"Found {len(train_pids)} PIDs in training set")
     return train_pids
@@ -67,7 +86,7 @@ def get_test_pids():
     Returns:
         list: List of PIDs in the test set
     """
-    pid_df = pd.read_csv('pid2split_sorted.csv')
+    pid_df = pd.read_csv(PID_SPLIT_CSV)
     test_pids = pid_df[pid_df['SPLIT'] == 'test']['PID'].tolist()
     logger.info(f"Found {len(test_pids)} PIDs in test set")
     return test_pids
@@ -82,7 +101,7 @@ def get_diagnosis_pids(diagnosis: str) -> list[int]:
     Returns:
         list: List of PIDs matching the diagnosis criteria
     """
-    actual_df = pd.read_csv('nlst_actual.csv')
+    actual_df = pd.read_csv(NLST_ACTUAL_CSV)
     # Get unique PIDs where days_to_diagnosis matches the criteria
     if diagnosis == 'positive':
         pids = actual_df[actual_df['days_to_diagnosis'] > 0]['pid'].unique().tolist()
@@ -104,14 +123,13 @@ def get_year_pids(year: int) -> list[int]:
     if not 1 <= year <= 6:
         raise ValueError("Year must be between 1 and 6")
     
-    actual_df = pd.read_csv('nlst_actual.csv')
+    actual_df = pd.read_csv(NLST_ACTUAL_CSV)
     year_col = f'canc_yr{year}'
     pids = actual_df[actual_df[year_col] == 1]['pid'].unique().tolist()
     logger.info(f"Found {len(pids)} PIDs with cancer diagnosis in year {year}")
     return pids
 
 def transfer_data(pids: list[int], dest_dir: str):
-    ENV_PATH = "/home/vhari/dom_ameen_chi_link/vhari/.env"
     load_dotenv(dotenv_path=ENV_PATH)
 
     # Access environment variables
@@ -134,8 +152,8 @@ def transfer_data(pids: list[int], dest_dir: str):
         progress = (idx / total_pids) * 100
         logger.info(f"Processing PID {idx}/{total_pids} ({progress:.1f}%): {pid}")
         
-        source_path = f'/dom_ameen/common/NLST/manifest-NLST_allCT/NLST/{pid}'
-        dest_path = f'/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2/{dest_dir}/{pid}'
+        source_path = f'{SOURCE_BASE_PATH}/{pid}'
+        dest_path = f'{DEST_BASE_PATH}/{dest_dir}/{pid}'
         
         # Check if destination directory already exists
         try:
@@ -244,10 +262,10 @@ if __name__ == "__main__":
     # Get base PIDs based on data type
     if data_type == 'train':
         pids = get_train_pids()
-        default_dest_dir = 'data/nlst/train'
+        default_dest_dir = DEFAULT_TRAIN_DIR
     elif data_type == 'test':
         pids = get_test_pids()
-        default_dest_dir = 'data/nlst/test'
+        default_dest_dir = DEFAULT_TEST_DIR
     else:
         logger.error("Invalid data type. Please specify 'train' or 'test'.")
         sys.exit(1)
