@@ -4,7 +4,9 @@ data:
   test_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/data/nlst/test'
   labels_file: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/nlst_actual.csv'
   train_patient_scan_count: 1000
-  test_patient_scan_count: 200
+  test_patient_scan_count: 2000
+  train_positive_ratio: 0.5  # 50-50 split for training
+  test_positive_ratio: 0.1  # 10% positive cases in test set
   check_slice_thickness: false
   train_val_split: 0.8
   use_clinical_features: false  # Flag to control clinical features usage
@@ -22,6 +24,7 @@ model:
   type: 'dinov2'  # Options: ['dinov2', 'rad_dino']
   dinov2_version: 'vitb14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
   name: 'DinoVisionTransformerCancerPredictor'  # Will be set based on model.type in the code
+  apply_positional_encoding: true  # Whether to apply positional encoding to slice features
   transformer:
     num_layers: 2
     nhead: 8

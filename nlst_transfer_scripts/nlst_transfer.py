@@ -48,7 +48,7 @@ LOG_DIR = 'logs/nlst_transfer/'
 DEFAULT_TRAIN_DIR = 'data/nlst/train'
 DEFAULT_TEST_DIR = 'data/nlst/test'
 SOURCE_BASE_PATH = '/dom_ameen/common/NLST/manifest-NLST_allCT/NLST'
-DEST_BASE_PATH = '/home/vhari/dom_ameen_chi_link/common/SENTINL0/dinov2'
+DEST_BASE_PATH = '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2'
 
 # Create log directory if it doesn't exist
 os.makedirs(LOG_DIR, exist_ok=True)

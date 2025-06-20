@@ -104,22 +104,32 @@ class PatientDicomDataset(Dataset):
         print(f"Found {len(valid_positive_scans)} valid positive scans and {len(valid_negative_scans)} valid negative scans")
         
         # Calculate how many to take from each group after validation
-        half_count = min(self.patient_scan_count // 2, len(valid_positive_scans), len(valid_negative_scans))
-        
+        if is_train:
+            # Use config ratio for training
+            positive_ratio = self.config['data']['train_positive_ratio']
+            num_positive = int(self.patient_scan_count * positive_ratio)
+            num_negative = self.patient_scan_count - num_positive
+        else:
+            # Use config ratio for test
+            positive_ratio = self.config['data']['test_positive_ratio']
+            num_positive = int(self.patient_scan_count * positive_ratio)
+            num_negative = self.patient_scan_count - num_positive
+            num_positive = min(num_positive, len(valid_positive_scans))
+            num_negative = min(num_negative, len(valid_negative_scans))
+
         # Randomly select from valid scans
         random.shuffle(valid_positive_scans)
         random.shuffle(valid_negative_scans)
-        
-        self.selected_positive = valid_positive_scans[:half_count]
-        self.selected_negative = valid_negative_scans[:half_count]
-        
+        self.selected_positive = valid_positive_scans[:num_positive]
+        self.selected_negative = valid_negative_scans[:num_negative]
+
         # Combine the selected patients
         selected_patient_scans = self.selected_positive + self.selected_negative
         print(f"Selected {len(selected_patient_scans)} patients ({len(self.selected_positive)} positive, {len(self.selected_negative)} negative)")
-        
+
         # Create flat list of (patient_id, study_yr) pairs
         self.scan_list = [(pid, yr) for pid, yr in selected_patient_scans]
-        
+
         print(f"Final dataset size: {len(self.scan_list)} scans")
         print('Scan list: ', self.scan_list)
     

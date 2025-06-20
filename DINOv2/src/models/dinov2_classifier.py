@@ -22,6 +22,7 @@ def get_dinov2_model(version):
 class DinoVisionTransformerCancerPredictor(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
         
         print("\nInitializing DinoVisionTransformerCancerPredictor...", flush=True)
         
@@ -129,7 +130,7 @@ class DinoVisionTransformerCancerPredictor(nn.Module):
             print(f"Model device: {next(self.parameters()).device}", flush=True)
             raise e
         
-        apply_positional_encoding = True
+        apply_positional_encoding = self.config['model'].get('apply_positional_encoding', True)
         if apply_positional_encoding:
             # Process each reconstruction separately
             recon_features = []
