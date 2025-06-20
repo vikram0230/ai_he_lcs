@@ -11,6 +11,7 @@ import numpy as np
 class RadDinoClassifier(nn.Module):
     def __init__(self, config):
         super().__init__()
+        self.config = config
         
         print("\nInitializing RadDinoClassifier...", flush=True)
         
@@ -43,34 +44,55 @@ class RadDinoClassifier(nn.Module):
                     param.requires_grad = False
             print(f"Running with unfrozen last few layers of RAD-DINO", flush=True)
         
-        self.position_encoding = AnatomicalPositionEncoding(config['model']['position_encoding_dim'])
-        print(f"Position encoding device: {next(self.position_encoding.parameters()).device}", flush=True)
+        if config['model'].get('apply_positional_encoding', False):
+            self.position_encoding = AnatomicalPositionEncoding(config['model']['position_encoding_dim'])
+            print(f"Position encoding device: {next(self.position_encoding.parameters()).device}", flush=True)
         
-        # Process sequence of slice features
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config['model']['feature_dim'],
-            nhead=config['model']['transformer']['nhead'],
-            dim_feedforward=config['model']['transformer']['dim_feedforward'],
-            dropout=config['model']['transformer']['dropout'],
-            batch_first=True  # Important for shape handling
-        )
-        self.slice_processor = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=config['model']['transformer']['num_layers']
-        )
+        # Build slice processor from config
+        slice_processor_layers = []
+        for layer_config in config['model']['slice_processor']['layers']:
+            layer_type = layer_config['type']
+            if layer_type == 'conv1d':
+                layer = nn.Conv1d(
+                    in_channels=feature_dim if layer_config['in_channels'] == 'feature_dim' else layer_config['in_channels'],
+                    out_channels=feature_dim if layer_config['out_channels'] == 'feature_dim' else layer_config['out_channels'],
+                    kernel_size=layer_config['kernel_size'],
+                    padding=layer_config['padding']
+                )
+            elif layer_type == 'batchnorm1d':
+                layer = nn.BatchNorm1d(feature_dim if layer_config['num_features'] == 'feature_dim' else layer_config['num_features'])
+            elif layer_type == 'relu':
+                layer = nn.ReLU()
+            elif layer_type == 'adaptive_avg_pool1d':
+                layer = nn.AdaptiveAvgPool1d(layer_config['output_size'])
+            slice_processor_layers.append(layer)
+        
+        self.slice_processor = nn.Sequential(*slice_processor_layers)
         
         # Initialize clinical features processing if enabled
         self.use_clinical_features = config['data'].get('use_clinical_features', False)
         if self.use_clinical_features:
             print("\nInitializing clinical features processing...", flush=True)
             clinical_feature_dim = config['data']['clinical_features']['feature_dim']
-            self.clinical_processor = nn.Sequential(
-                nn.Linear(clinical_feature_dim, 256),
-                nn.LayerNorm(256),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(256, 128)
-            )
+            
+            # Build clinical processor from config
+            clinical_processor_layers = []
+            for layer_config in config['model']['clinical_processor']['layers']:
+                layer_type = layer_config['type']
+                if layer_type == 'linear':
+                    layer = nn.Linear(
+                        in_features=clinical_feature_dim if layer_config['in_features'] == 'clinical_feature_dim' else layer_config['in_features'],
+                        out_features=layer_config['out_features']
+                    )
+                elif layer_type == 'layernorm':
+                    layer = nn.LayerNorm(layer_config['normalized_shape'])
+                elif layer_type == 'relu':
+                    layer = nn.ReLU()
+                elif layer_type == 'dropout':
+                    layer = nn.Dropout(layer_config['p'])
+                clinical_processor_layers.append(layer)
+            
+            self.clinical_processor = nn.Sequential(*clinical_processor_layers)
             # Adjust predictor input dimension to include clinical features
             predictor_input_dim = config['model']['feature_dim'] + 128
         else:
@@ -96,7 +118,7 @@ class RadDinoClassifier(nn.Module):
         
         self.predictor = nn.Sequential(*predictor_layers)
         
-        self.reconstruction_attention = ReconstructionAttention(config['model']['feature_dim'])
+        # self.reconstruction_attention = ReconstructionAttention(config['model']['feature_dim'])
 
     def forward(self, x, slice_positions, attention_mask=None, clinical_features=None):
         """
@@ -116,12 +138,9 @@ class RadDinoClassifier(nn.Module):
         
         B, R, S, C, H, W = x.shape  # batch, reconstructions, slices, channels, height, width
         
-        # Ensure input is on the same device as the model and in float32
         model_device = next(self.parameters()).device
         x = x.to(model_device).float()  # Force float32
         slice_positions = slice_positions.to(model_device)
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(model_device)
         
         # Reshape to batch all images together
         x_reshaped = x.view(B * R * S, C, H, W)
@@ -146,59 +165,24 @@ class RadDinoClassifier(nn.Module):
             print(f"Model device: {next(self.parameters()).device}", flush=True)
             raise e
         
-        apply_positional_encoding = True
-        if apply_positional_encoding:
-            # Process each reconstruction separately
-            recon_features = []
-            for r in range(R):
-                slice_features = features[:, r]  # [B, S, feature_dim]
-                
-                # Add positional encoding
-                positions = slice_positions.unsqueeze(-1)
-                position_encoding = self.position_encoding(positions)
-                slice_features_with_position_encoding = slice_features + position_encoding
-                
-                # Handle masking
-                if attention_mask is not None:
-                    mask = attention_mask[:, r]  # [B, S]
-                    key_padding_mask = ~mask.bool()  # For transformer
-                else:
-                    key_padding_mask = None
-                
-                # Process through slice transformer
-                processed_slice_sequence = self.slice_processor(
-                    slice_features_with_position_encoding,
-                    src_key_padding_mask=key_padding_mask
-                )
-                
-                # Attention pooling with masking
-                if attention_mask is not None:
-                    mask = mask.unsqueeze(1)  # [B, 1, S]
-                    processed_slice_sequence = processed_slice_sequence * mask.unsqueeze(-1)
-                
-                # Pool features across slices to get a single feature vector per reconstruction
-                recon_feature = processed_slice_sequence.mean(dim=1)  # [B, feature_dim]
-                recon_features.append(recon_feature)
-            
-            # Stack reconstructions
-            recon_features = torch.stack(recon_features, dim=1)  # [B, R, feature_dim]
-            
-            # Apply reconstruction attention to get a single feature vector per scan
-            if attention_mask is not None:
-                recon_mask = (attention_mask.sum(dim=-1) > 0).float()  # [B, R]
-                attention_weights = self.reconstruction_attention(recon_features)
-                attention_weights = attention_weights * recon_mask.unsqueeze(-1).unsqueeze(-1)
-                attention_weights = attention_weights / (attention_weights.sum(dim=1, keepdim=True) + 1e-9)
-            else:
-                attention_weights = self.reconstruction_attention(recon_features)
-            
-            # Combine features to get a single feature vector per scan
-            final_features = torch.sum(attention_weights * recon_features, dim=1)  # [B, feature_dim]
+        # Remove the hardcoded variable and use config
+        apply_positional_encoding = self.config['model'].get('apply_positional_encoding', False)
         
-        else:
-            # Reshape features from [1, 1, 168, 384] to [168, 384]
-            final_features = features.squeeze(0).squeeze(0)
-            
+        # Process single reconstruction
+        slice_features = features[:, 0]  # [B, S, feature_dim] - take first (and only) reconstruction
+        
+        # Add positional encoding if enabled
+        if apply_positional_encoding:
+            positions = slice_positions.unsqueeze(-1)
+            position_encoding = self.position_encoding(positions)
+            slice_features = slice_features + position_encoding
+        
+        # Transpose to [B, feature_dim, S] for Conv1d
+        slice_features = slice_features.transpose(1, 2)
+        processed_slice_sequence = self.slice_processor(slice_features)
+        # Remove the extra dimension from adaptive pooling
+        final_features = processed_slice_sequence.squeeze(-1)  # [B, feature_dim]
+        
         # Process clinical features if enabled and provided
         if self.use_clinical_features and clinical_features is not None:
             clinical_features = clinical_features.to(model_device)
@@ -342,18 +326,13 @@ class RadDinoClassifier(nn.Module):
             for r in range(R):
                 slice_features = features[:, r]  # [B, S, feature_dim]
                 # Get attention maps from slice processor
-                for layer in self.slice_processor.layers:
+                for layer in self.slice_processor:
                     # Compute attention weights for slice processor
-                    qkv = layer.self_attn.qkv(slice_features)  # [B, S, 3*num_heads*head_dim]
-                    # Calculate head_dim for slice processor
-                    head_dim = layer.self_attn.qkv.out_features // (3 * layer.self_attn.num_heads)
-                    # Split into Q, K, V
-                    qkv = qkv.reshape(B, -1, 3, layer.self_attn.num_heads, head_dim)
-                    qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, num_heads, S, head_dim]
-                    q, k, v = qkv.unbind(0)  # Each is [B, num_heads, S, head_dim]
+                    qkv = layer(slice_features.unsqueeze(1))  # [B, 1, feature_dim]
+                    qkv = qkv.squeeze(1)  # [B, feature_dim]
                     
                     # Compute attention scores
-                    attn = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+                    attn = (qkv @ slice_features) * (1.0 / math.sqrt(slice_features.size(-1)))
                     attn = attn.softmax(dim=-1)
                     slice_attention_maps.append(attn)
             
@@ -365,10 +344,10 @@ class RadDinoClassifier(nn.Module):
                 recon_features.append(recon_feature)
             
             recon_features = torch.stack(recon_features, dim=1)  # [B, R, feature_dim]
-            reconstruction_attention = self.reconstruction_attention(recon_features)
+            # reconstruction_attention = self.reconstruction_attention(recon_features)
             
             return {
                 'attention': rad_dino_attention_maps,
                 'slice_attention': slice_attention_maps,
-                'reconstruction_attention': reconstruction_attention
+                # 'reconstruction_attention': reconstruction_attention
             }

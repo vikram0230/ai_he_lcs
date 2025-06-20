@@ -4,7 +4,9 @@ data:
   test_data_dir: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/data/nlst/test'
   labels_file: '/home/vhari/dom_ameen_chi_link/common/SENTINL0/al-he-lcs_git/DINOv2/nlst_actual.csv'
   train_patient_scan_count: 1000
-  test_patient_scan_count: 200
+  test_patient_scan_count: 1000
+  train_positive_ratio: 0.5  # 50-50 split for training
+  test_positive_ratio: 0.1  # 10% positive cases in test set
   check_slice_thickness: false
   train_val_split: 0.8
   use_clinical_features: false  # Flag to control clinical features usage
@@ -22,14 +24,51 @@ model:
   type: 'rad_dino'  # Options: ['dinov2', 'rad_dino']
   dinov2_version: 'vitb14'  # only needed for DINOv2 [Options: 'vits14', 'vitb14', 'vitl14', 'vitg14']
   name: 'RadDinoClassifier'  # Will be set based on model.type in the code
-  transformer:
-    num_layers: 2
-    nhead: 8
-    dim_feedforward: 1024
-    dropout: 0.1
+  apply_positional_encoding: false  # Whether to apply positional encoding to slice features
+  
+  # Slice processor architecture (1D CNN)
+  slice_processor:
+    layers:
+      - type: 'conv1d'
+        in_channels: 'feature_dim'  # Will be set based on RAD-DINO output
+        out_channels: 'feature_dim'
+        kernel_size: 3
+        padding: 1
+      - type: 'batchnorm1d'
+        num_features: 'feature_dim'
+      - type: 'relu'
+      - type: 'conv1d'
+        in_channels: 'feature_dim'
+        out_channels: 'feature_dim'
+        kernel_size: 3
+        padding: 1
+      - type: 'batchnorm1d'
+        num_features: 'feature_dim'
+      - type: 'relu'
+      - type: 'adaptive_avg_pool1d'
+        output_size: 1
+  
+  # Clinical features processor (not enabled)
+  clinical_processor:
+    layers:
+      - type: 'linear'
+        in_features: 'clinical_feature_dim'  # Will be set based on clinical features
+        out_features: 256
+      - type: 'layernorm'
+        normalized_shape: 256
+      - type: 'relu'
+      - type: 'dropout'
+        p: 0.1
+      - type: 'linear'
+        in_features: 256
+        out_features: 128
+  
+  # Final predictor architecture
   predictor:
     layers: [256, 128, 1]
     dropout: 0.1
+  
+  # RAD-DINO fine-tuning options
   unfreeze_last_layers: false  # Whether to unfreeze last few layers of DINOv2
   unfreeze_layers: [9, 10, 11]  # Which layers to unfreeze if unfreeze_last_layers is true
 
@@ -39,10 +78,10 @@ training:
   num_epochs: 50
   learning_rate: 0.0001
   early_stopping:
-    patience: 10
+    patience: 7
   optimizer:
     name: 'Adam'
-    weight_decay: 0.01  # Increased for better regularization
+    weight_decay: 0.01
   scheduler:
     name: 'ReduceLROnPlateau'
     # name: 'CosineAnnealingWarmupRestarts'
